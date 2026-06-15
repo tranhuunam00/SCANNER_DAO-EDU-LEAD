@@ -75,7 +75,7 @@ async function saveScanResultLocally(result) {
   const currentPostId = result.summary.postId;
   const retained = existing.filter(
     (item) =>
-      Number(item.parserVersion || 0) >= 14 &&
+      Number(item.parserVersion || 0) >= 21 &&
       isPostUrl(item.pageUrl) &&
       item.pageUrl !== result.summary.postUrl &&
       item.postId !== currentPostId,
@@ -129,6 +129,14 @@ function isPostUrl(value) {
 async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
   await waitForPostContent(15000);
 
+  const pinnedPostUrl = getPostUrlForRoot(getPostRoot());
+  if (!isPostUrl(pinnedPostUrl)) {
+    return {
+      ok: false,
+      error: 'Hay mo rieng mot bai viet Facebook truoc khi quet.',
+    };
+  }
+
   let clickedExpanders = 0;
   let emptyRounds = 0;
   let previousScrollHeight = 0;
@@ -136,7 +144,12 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
   let latestSummary = null;
   let lastScanError = '';
 
-  collectScanSnapshot();
+  if (!collectScanSnapshot()) {
+    return {
+      ok: false,
+      error: lastScanError || 'Khong doc duoc bai viet dang mo.',
+    };
+  }
 
   for (let round = 1; round <= maxRounds; round += 1) {
     const result = await expandCommentRound(maxClicksPerRound);
@@ -154,17 +167,13 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
 
   await sleep(700);
   collectScanSnapshot();
-  if (!latestSummary) {
-    return {
-      ok: false,
-      error: lastScanError || 'Khong doc duoc bai viet dang mo.',
-    };
-  }
 
   const collectedItems = [...collected.values()];
   const post = collectedItems.find((item) => item.kind === 'POST') || null;
   const comments = resolveCommentRelationships(
-    collectedItems.filter((item) => item.kind === 'COMMENT'),
+    refineFlattenedThreadParents(
+      collectedItems.filter((item) => item.kind === 'COMMENT'),
+    ),
     post,
   );
   const items = [post, ...comments].filter(Boolean);
@@ -183,10 +192,10 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
   };
 
   function collectScanSnapshot() {
-    const scan = scanCurrentPost();
+    const scan = scanCurrentPost(pinnedPostUrl);
     if (!scan.ok) {
       lastScanError = scan.error || '';
-      return;
+      return false;
     }
     latestSummary = scan.summary;
     for (const item of scan.items) {
@@ -198,6 +207,7 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
           Number(item.depth || 0) > Number(existing.depth || 0));
       if (shouldReplace) collected.set(item.fingerprint, item);
     }
+    return true;
   }
 }
 
@@ -251,19 +261,38 @@ async function waitForPostContent(timeoutMilliseconds) {
   throw new Error('Facebook did not render the post content in time.');
 }
 
-function scanCurrentPost() {
+function scanCurrentPost(postUrlOverride = '') {
   try {
     const root = getPostRoot();
-    const postUrl = getPostUrlForRoot(root);
+    const postUrl = postUrlOverride || getPostUrlForRoot(root);
     if (!isPostUrl(postUrl)) {
       throw new Error(
         'Hay mo rieng mot bai viet hoac mo dialog bai viet truoc khi quet.',
       );
     }
     const expectedPostId = extractPostId(postUrl);
-    const post = parseOriginalPost(root, postUrl);
-    const comments = parseAllComments(root, post, postUrl).filter(
+    const warnings = [];
+    let post = null;
+    let comments = [];
+
+    try {
+      comments = parseAllComments(root, null, postUrl);
+    } catch (error) {
+      warnings.push(`COMMENTS: ${error.message || String(error)}`);
+    }
+
+    try {
+      post = parseOriginalPost(root, postUrl, comments);
+    } catch (error) {
+      warnings.push(`POST: ${error.message || String(error)}`);
+      post = createMissingOriginalPost(postUrl);
+    }
+    comments = comments.filter(
       (comment) => comment.postId === expectedPostId,
+    );
+    comments = resolveCommentRelationships(
+      refineFlattenedThreadParents(comments),
+      post,
     );
     const items = uniqueByFingerprint([post, ...comments].filter(Boolean));
 
@@ -279,6 +308,7 @@ function scanCurrentPost() {
         postUrl,
         postId: expectedPostId,
         postDetected: Boolean(post?.text),
+        warnings,
       },
     };
   } catch (error) {
@@ -368,23 +398,7 @@ function applyScannedMarkers(scanned) {
   }
 }
 
-function parseOriginalPost(root, postUrl, snapshot = null) {
-  if (snapshot?.text) {
-    return createItem({
-      kind: 'POST',
-      author: snapshot.author,
-      text: snapshot.text,
-      sourceUrl: postUrl,
-      parentFingerprint: null,
-      postId: extractPostId(postUrl),
-      commentId: null,
-      parentCommentId: null,
-      depth: 0,
-      treePath: '',
-      contextTexts: [snapshot.text],
-    });
-  }
-
+function parseOriginalPost(root, postUrl, comments = []) {
   const messageNodes = [
     ...root.querySelectorAll('[data-ad-preview="message"]'),
     ...root.querySelectorAll('[data-ad-comet-preview="message"]'),
@@ -406,17 +420,24 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     .sort((a, b) => b.text.length - a.text.length)[0];
 
   const fallbackArticle = originalPostArticle;
-  if (!messageNode) {
+  const fallbackText =
+    extractOriginalPostText(fallbackArticle) ||
+    extractPostTextFromRoot(root, originalPostArticle, comments);
+  if (!messageNode && !fallbackText) {
     return isPostUrl(postUrl)
-      ? createMissingOriginalPost(postUrl, snapshot?.author)
+      ? createMissingOriginalPost(postUrl)
       : null;
   }
 
   const container = messageNode
     ? findPostContainer(messageNode.node, root)
-    : fallbackArticle || root;
-  const author = findAuthor(container, { preferHeader: true });
-  const text = messageNode.text;
+    : fallbackArticle
+      ? cloneWithoutNestedArticles(fallbackArticle)
+      : null;
+  const author = container
+    ? findAuthor(container, { preferHeader: true })
+    : { name: '', url: '' };
+  const text = messageNode?.text || fallbackText;
   return createItem({
     kind: 'POST',
     author,
@@ -430,6 +451,81 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     treePath: '',
     contextTexts: [text],
   });
+}
+
+function extractPostTextFromRoot(root, originalPostArticle, comments) {
+  if (!(root instanceof Element)) return '';
+
+  const commentTexts = new Set(
+    comments.map((comment) => cleanText(comment.text)).filter(Boolean),
+  );
+  const commentAuthors = new Set(
+    comments.map((comment) => cleanText(comment.authorName)).filter(Boolean),
+  );
+  const interactionTop = findPostInteractionTop(root, originalPostArticle);
+  if (!Number.isFinite(interactionTop)) return '';
+
+  const candidates = [
+    ...root.querySelectorAll(
+      '[data-ad-preview="message"], [data-ad-comet-preview="message"], [dir="auto"]',
+    ),
+  ]
+    .filter((node) => {
+      const article = node.closest('[role="article"]');
+      return (
+        isVisible(node) &&
+        (!article || article === originalPostArticle) &&
+        !node.closest('a, button, [role="button"]') &&
+        node.getBoundingClientRect().bottom <= interactionTop
+      );
+    })
+    .map((node) => cleanText(node.innerText))
+    .filter(isUsefulContent)
+    .filter((text) => !commentTexts.has(text))
+    .filter((text) => !commentAuthors.has(text))
+    .filter((text) => !isInterfaceText(text))
+    .filter((text) => !isMetadataText(text));
+
+  return [...new Set(candidates)].sort((a, b) => b.length - a.length)[0] || '';
+}
+
+function findPostInteractionTop(root, originalPostArticle) {
+  const tops = [...root.querySelectorAll('[role="button"], button')]
+    .filter(isVisible)
+    .filter((node) => {
+      const article = node.closest('[role="article"]');
+      if (article && article !== originalPostArticle) return false;
+      const text = normalizeUiText(
+        node.getAttribute('aria-label') ||
+          node.getAttribute('title') ||
+          node.innerText ||
+          node.textContent,
+      );
+      return /^(thich|binh luan|chia se|like|comment|share)(\b|:)/.test(text);
+    })
+    .map((node) => node.getBoundingClientRect().top)
+    .filter(Number.isFinite);
+  return tops.length ? Math.min(...tops) : Number.NaN;
+}
+
+function extractOriginalPostText(article) {
+  if (!(article instanceof Element)) return '';
+
+  const scope = cloneWithoutNestedArticles(article);
+  const author = findAuthor(scope, { preferHeader: true });
+  const candidates = [
+    ...scope.querySelectorAll(
+      '[data-ad-preview="message"], [data-ad-comet-preview="message"], [dir="auto"]',
+    ),
+  ]
+    .filter((node) => !node.closest('a, button, [role="button"]'))
+    .map((node) => cleanText(node.innerText))
+    .filter(isUsefulContent)
+    .filter((text) => text !== author.name)
+    .filter((text) => !isInterfaceText(text))
+    .filter((text) => !isMetadataText(text));
+
+  return [...new Set(candidates)].sort((a, b) => b.length - a.length)[0] || '';
 }
 
 function createMissingOriginalPost(postUrl, author = null) {
@@ -524,32 +620,48 @@ function parseAllComments(root, post, postUrl) {
   );
   const postText = post?.text || '';
   const parsedByArticle = new Map();
+  const parsedThreadRootByContainer = new Map();
   const visualStack = [];
 
   for (const article of articleNodes) {
-    const parentArticle = findParentCommentArticle(article, root);
-    const nestedParentItem = parentArticle
-      ? parsedByArticle.get(parentArticle) || null
-      : null;
-    const visualLeft = getCommentVisualLeft(article);
-    while (
-      visualStack.length &&
-      visualStack[visualStack.length - 1].left >= visualLeft - 8
-    ) {
-      visualStack.pop();
-    }
-    const visualParentItem =
-      visualStack[visualStack.length - 1]?.item || null;
-    const item = parseCommentArticle(article, {
-      parentFingerprint: post?.fingerprint || null,
-      postUrl,
-      postId,
-      postText,
-      parentItem: visualParentItem || nestedParentItem,
-    });
-    if (item) {
-      parsedByArticle.set(article, item);
-      visualStack.push({ left: visualLeft, item });
+    try {
+      const threadContainer = findCommentThreadContainer(article, root);
+      const threadRootItem = threadContainer
+        ? parsedThreadRootByContainer.get(threadContainer) || null
+        : null;
+      const parentArticle = findParentCommentArticle(article, root);
+      const nestedParentItem = parentArticle
+        ? parsedByArticle.get(parentArticle) || null
+        : null;
+      const visualLeft = getCommentVisualLeft(article);
+      let parentIndex = visualStack.length - 1;
+      while (
+        parentIndex >= 0 &&
+        visualStack[parentIndex].left >= visualLeft - 8
+      ) {
+        parentIndex -= 1;
+      }
+      const visualParentItem =
+        visualStack[parentIndex]?.item || null;
+      const item = parseCommentArticle(article, {
+        parentFingerprint: post?.fingerprint || null,
+        postUrl,
+        postId,
+        postText,
+        parentItem: visualParentItem || nestedParentItem,
+        precedingItems: [...parsedByArticle.values()],
+        threadRootItem,
+      });
+      if (item) {
+        parsedByArticle.set(article, item);
+        if (threadContainer && !threadRootItem) {
+          parsedThreadRootByContainer.set(threadContainer, item);
+        }
+        visualStack.splice(parentIndex + 1);
+        visualStack.push({ left: visualLeft, item });
+      }
+    } catch {
+      // Facebook can replace individual comment nodes while scanning.
     }
   }
 
@@ -557,6 +669,26 @@ function parseAllComments(root, post, postUrl) {
     uniqueByFingerprint([...parsedByArticle.values()]),
     post,
   );
+}
+
+function findCommentThreadContainer(article, root) {
+  let current = article.parentElement;
+  while (current && current !== root) {
+    if (current.matches?.('[data-virtualized="false"]')) {
+      const firstArticle = current.querySelector('[role="article"]');
+      if (firstArticle) {
+        const firstScope = cloneWithoutNestedArticles(firstArticle);
+        const firstRelation = extractCommentRelation(
+          findCommentPermalink(firstScope),
+        );
+        if (firstRelation.commentId && !firstRelation.parentCommentId) {
+          return current;
+        }
+      }
+    }
+    current = current.parentElement;
+  }
+  return null;
 }
 
 function getCommentVisualLeft(article) {
@@ -615,6 +747,47 @@ function resolveCommentRelationships(comments, post) {
   return comments;
 }
 
+function refineFlattenedThreadParents(comments) {
+  const precedingByThread = new Map();
+  const carriedParentByThread = new Map();
+
+  for (const comment of comments) {
+    const relation = extractCommentRelation(comment.sourceUrl);
+    const threadRootId = relation.parentCommentId;
+    if (!threadRootId) continue;
+
+    const preceding = precedingByThread.get(threadRootId) || [];
+    const normalizedText = normalizeUiText(comment.text);
+    const mentionedParent = [...preceding].reverse().find((candidate) => {
+      const normalizedAuthor = normalizeUiText(candidate.authorName);
+      return (
+        normalizedAuthor &&
+        (normalizedText === normalizedAuthor ||
+          normalizedText.startsWith(`${normalizedAuthor} `))
+      );
+    });
+
+    if (mentionedParent && mentionedParent.commentId !== threadRootId) {
+      comment.parentCommentId = mentionedParent.commentId;
+      carriedParentByThread.set(threadRootId, mentionedParent.commentId);
+    } else if (
+      !mentionedParent &&
+      comment.parentCommentId === threadRootId &&
+      carriedParentByThread.has(threadRootId)
+    ) {
+      comment.parentCommentId = carriedParentByThread.get(threadRootId);
+    } else if (mentionedParent?.commentId === threadRootId) {
+      comment.parentCommentId = threadRootId;
+      carriedParentByThread.delete(threadRootId);
+    }
+
+    preceding.push(comment);
+    precedingByThread.set(threadRootId, preceding);
+  }
+
+  return comments;
+}
+
 function articleBelongsToPost(article, expectedPostId, root) {
   const ownScope = cloneWithoutNestedArticles(article);
   const ownPermalink = findCommentPermalink(ownScope);
@@ -654,7 +827,15 @@ function isDirectPostLink(value, normalizedPostUrl) {
 
 function parseCommentArticle(
   article,
-  { parentFingerprint, postUrl, postId, postText, parentItem },
+  {
+    parentFingerprint,
+    postUrl,
+    postId,
+    postText,
+    parentItem,
+    precedingItems = [],
+    threadRootItem,
+  },
 ) {
   const ownScope = cloneWithoutNestedArticles(article);
   const author = findAuthor(ownScope);
@@ -666,16 +847,30 @@ function parseCommentArticle(
     findCommentPermalink(ownScope) ||
     postUrl;
   const relation = extractCommentRelation(commentUrl);
+  if (
+    threadRootItem?.commentId &&
+    relation.parentCommentId &&
+    relation.parentCommentId !== threadRootItem.commentId
+  ) {
+    return null;
+  }
   const commentId =
     relation.commentId ||
     createLocalCommentId(postId, author, text);
-  const parentCommentId = chooseDirectParentCommentId(relation, parentItem);
-  const depth = parentItem ? parentItem.depth + 1 : 1;
-  const treePath = parentItem?.treePath
-    ? `${parentItem.treePath}|${commentId}`
+  const directParentItem =
+    findMentionedParentItem(relation, text, precedingItems) ||
+    parentItem ||
+    (relation.parentCommentId ? threadRootItem : null);
+  const parentCommentId = chooseDirectParentCommentId(
+    relation,
+    directParentItem,
+  );
+  const depth = directParentItem ? directParentItem.depth + 1 : 1;
+  const treePath = directParentItem?.treePath
+    ? `${directParentItem.treePath}|${commentId}`
     : commentId;
   const contextTexts = [
-    ...(parentItem?.contextTexts || (postText ? [postText] : [])),
+    ...(directParentItem?.contextTexts || (postText ? [postText] : [])),
     text,
   ];
 
@@ -684,23 +879,80 @@ function parseCommentArticle(
     author,
     text,
     sourceUrl: commentUrl,
-    parentFingerprint: parentItem?.fingerprint || parentFingerprint,
+    parentFingerprint: directParentItem?.fingerprint || parentFingerprint,
     postId,
     commentId,
     parentCommentId,
     depth,
     treePath,
     contextTexts,
-    replyToAuthor: parentItem?.authorName || '',
+    replyToAuthor: directParentItem?.authorName || '',
   });
 }
 
+function findMentionedParentItem(relation, text, precedingItems) {
+  if (!relation.parentCommentId) return null;
+
+  const normalizedText = normalizeUiText(text);
+  const rootItem =
+    precedingItems.find(
+      (candidate) => candidate.commentId === relation.parentCommentId,
+    ) || null;
+  const threadItems = precedingItems.filter((candidate) => {
+    const threadRootId = candidate.treePath?.split('|')[0] || '';
+    return (
+      candidate.commentId === relation.parentCommentId ||
+      threadRootId === relation.parentCommentId
+    );
+  });
+
+  // A Facebook reply permalink identifies only the thread root. The visible
+  // leading mention identifies the direct parent when replies are nested.
+  const mentionedCandidates = threadItems.filter((candidate) => {
+    const normalizedAuthor = normalizeUiText(candidate.authorName);
+    return (
+      normalizedAuthor &&
+      (normalizedText === normalizedAuthor ||
+        normalizedText.startsWith(`${normalizedAuthor} `))
+    );
+  });
+  if (mentionedCandidates.length) {
+    return mentionedCandidates[mentionedCandidates.length - 1];
+  }
+
+  // Without a leading mention, only the first reply can be assigned safely.
+  // Deeper placement is left to the DOM indentation fallback.
+  if (threadItems.length === 1) return rootItem;
+
+  for (let index = precedingItems.length - 1; index >= 0; index -= 1) {
+    const candidate = precedingItems[index];
+    const threadRootId = candidate.treePath?.split('|')[0] || '';
+    if (
+      candidate.commentId !== relation.parentCommentId &&
+      threadRootId !== relation.parentCommentId
+    ) {
+      continue;
+    }
+
+    const normalizedAuthor = normalizeUiText(candidate.authorName);
+    if (
+      normalizedAuthor &&
+      (normalizedText === normalizedAuthor ||
+        normalizedText.startsWith(`${normalizedAuthor} `))
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function chooseDirectParentCommentId(relation, parentItem) {
+  if (!relation.parentCommentId) return null;
+
   const parentThreadRootId = parentItem?.treePath?.split('|')[0] || '';
   const isParentInUrlThread =
     parentItem &&
-    (!relation.parentCommentId ||
-      parentItem.commentId === relation.parentCommentId ||
+    (parentItem.commentId === relation.parentCommentId ||
       parentThreadRootId === relation.parentCommentId);
   return (
     (isParentInUrlThread ? parentItem.commentId : relation.parentCommentId) ||
@@ -733,7 +985,7 @@ function createItem({
     ].join('|'),
   );
   return {
-    parserVersion: 14,
+    parserVersion: 21,
     kind,
     source: 'FACEBOOK_GROUP',
     groupUrl: getGroupUrl(),
@@ -816,6 +1068,17 @@ function extractCommentText(scope, authorName) {
 }
 
 function findAuthor(container, options = {}) {
+  const anonymousName = [...container.querySelectorAll('strong, [dir="auto"]')]
+    .map((node) => cleanText(node.innerText || node.textContent))
+    .find((name) =>
+      /^(nguoi tham gia an danh|anonymous participant)\b/.test(
+        normalizeUiText(name),
+      ),
+    );
+  if (anonymousName) {
+    return { name: anonymousName, url: '' };
+  }
+
   const candidates = [...container.querySelectorAll('a[href]')]
     .map((link) => ({
       link,

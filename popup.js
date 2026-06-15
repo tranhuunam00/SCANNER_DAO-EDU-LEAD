@@ -2,7 +2,7 @@ const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
-const MIN_PARSER_VERSION = 14;
+const MIN_PARSER_VERSION = 21;
 
 const scanButton = document.getElementById('scan');
 const postUrlInput = document.getElementById('postUrl');
@@ -437,17 +437,21 @@ function normalizeInputPostUrl(value) {
   if (!input) return '';
   try {
     const url = new URL(input);
-    if (
-      !['www.facebook.com', 'web.facebook.com', 'm.facebook.com'].includes(
-        url.hostname,
-      ) ||
-      !/\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(url.pathname)
-    ) {
+    const allowedHost = [
+      'www.facebook.com',
+      'web.facebook.com',
+      'm.facebook.com',
+      'facebook.com',
+    ].includes(url.hostname);
+    const isGroupPost =
+      /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(url.pathname);
+    const isSharePost = /^\/share\/p\/[^/]+\/?$/.test(url.pathname);
+    if (!allowedHost || (!isGroupPost && !isSharePost)) {
       return '';
     }
     url.hostname = 'www.facebook.com';
-    url.search = '';
     url.hash = '';
+    if (isGroupPost) url.search = '';
     return url.toString();
   } catch {
     return '';
@@ -455,12 +459,15 @@ function normalizeInputPostUrl(value) {
 }
 
 async function waitForTabComplete(tabId, expectedUrl) {
+  const expectedIdentity = getPostIdentity(expectedUrl);
   const startedAt = Date.now();
   while (Date.now() - startedAt < 20000) {
     const tab = await chrome.tabs.get(tabId);
+    const actualIdentity = getPostIdentity(tab.url);
     if (
       tab.status === 'complete' &&
-      getPostIdentity(tab.url) === getPostIdentity(expectedUrl)
+      actualIdentity &&
+      (!expectedIdentity || actualIdentity === expectedIdentity)
     ) {
       await sleep(800);
       return;
