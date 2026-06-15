@@ -15,6 +15,8 @@ const EXPAND_TEXT_PATTERNS = [
 const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
+const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
+let groupBatchRunning = false;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'PING_SCANNER') {
@@ -59,6 +61,40 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'OPEN_SCAN_AND_CLOSE_FEED_POST') {
+    openScanAndCloseFeedPost(
+      message.target,
+      Number(message.maxRounds) || 20,
+      Number(message.maxClicksPerRound) || 40,
+    )
+      .then(sendResponse)
+      .catch((error) =>
+        sendResponse({ ok: false, error: error.message || String(error) }),
+      );
+    return true;
+  }
+
+  if (message?.type === 'RUN_GROUP_BATCH') {
+    if (groupBatchRunning) {
+      sendResponse({ ok: false, error: 'Batch scan is already running.' });
+      return;
+    }
+
+    groupBatchRunning = true;
+    sendResponse({ ok: true });
+    runGroupBatch(Number(message.limit) || 10)
+      .catch((error) =>
+        updateContentBatchState({
+          status: 'ERROR',
+          message: error.message || String(error),
+        }),
+      )
+      .finally(() => {
+        groupBatchRunning = false;
+      });
+    return;
+  }
+
   if (message?.type === 'SCROLL_GROUP_FEED') {
     window.scrollBy({
       top: Math.max(window.innerHeight * 0.9, 750),
@@ -68,6 +104,500 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
 });
+
+async function runGroupBatch(limit) {
+  const attemptedUrls = new Set();
+  let completed = 0;
+  let failed = 0;
+  let emptyScrollRounds = 0;
+  let previousPageHeight = document.documentElement.scrollHeight;
+
+  while (completed < limit && emptyScrollRounds < 8) {
+    const scannedUrls = await getScannedUrlSet();
+    applyScannedMarkers(scannedUrls);
+
+    const candidate = findNextUnscannedPost(scannedUrls, attemptedUrls);
+    if (!candidate) {
+      await updateContentBatchState({
+        current: completed,
+        message: `Dang cuon tim bai chua quet (${completed}/${limit})...`,
+      });
+      window.scrollBy({
+        top: Math.max(window.innerHeight * 0.85, 650),
+        behavior: 'smooth',
+      });
+      await sleep(1800);
+
+      const pageHeight = document.documentElement.scrollHeight;
+      emptyScrollRounds =
+        pageHeight <= previousPageHeight ? emptyScrollRounds + 1 : 0;
+      previousPageHeight = Math.max(previousPageHeight, pageHeight);
+      continue;
+    }
+
+    emptyScrollRounds = 0;
+    attemptedUrls.add(candidate.url);
+    candidate.article.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    await sleep(700);
+
+    await updateContentBatchState({
+      current: completed + 1,
+      message: `Dang mo va quet sau bai ${completed + 1}/${limit}...`,
+      activePostUrl: candidate.url,
+    });
+
+    let opened = null;
+    try {
+      opened = await openBatchPost(candidate);
+      const result = await deepScanCurrentPost(20, 40);
+      if (!result?.ok) {
+        throw new Error(result?.error || 'Khong doc duoc bai viet.');
+      }
+
+      await saveScanResultLocally(result);
+      await markPostScannedLocally(result.summary.postUrl || candidate.url);
+      markArticleScanned(candidate.article);
+      completed += 1;
+
+      await updateContentBatchState({
+        current: completed,
+        processedTotal: await incrementContentBatchCounter('processedTotal'),
+        lastResult: {
+          postUrl: result.summary.postUrl || candidate.url,
+          posts: result.summary.posts,
+          comments: result.summary.comments,
+          clickedExpanders: result.summary.clickedExpanders,
+        },
+        message: `Da quet bai ${completed}/${limit}: ${result.summary.comments} binh luan.`,
+      });
+
+      await closeBatchPost(opened);
+      applyScannedMarkers(await getScannedUrlSet());
+      await sleep(900);
+    } catch (error) {
+      failed += 1;
+      await updateContentBatchState({
+        failedTotal: await incrementContentBatchCounter('failedTotal'),
+        lastResult: {
+          postUrl: candidate.url,
+          error: error.message || String(error),
+        },
+        message: `Bo qua mot bai loi: ${error.message || String(error)}`,
+      });
+      await closeBatchPost(opened).catch(() => {});
+      await sleep(700);
+    }
+  }
+
+  const reachedLimit = completed >= limit;
+  await updateContentBatchState({
+    status: reachedLimit ? 'AWAITING_CONTINUE' : 'DONE',
+    current: completed,
+    activePostUrl: null,
+    message: reachedLimit
+      ? `Da quet du ${limit} bai. Ban co muon quet tiep 10 bai khong?`
+      : `Da quet ${completed} bai, loi ${failed}. Khong tim thay bai moi sau khi cuon.`,
+  });
+}
+
+function findNextUnscannedPost(scannedUrls, attemptedUrls) {
+  const candidates = [...document.querySelectorAll('a[href]')]
+    .map((link) => {
+      const url = normalizePostUrl(link.href);
+      const article = findPostArticleForLink(link, url);
+      return { link, url, article };
+    })
+    .filter(
+      ({ link, url, article }) =>
+        article &&
+        !link.closest('[role="dialog"]') &&
+        isPostUrl(url) &&
+        isDirectPostLink(link.href, url) &&
+        !scannedUrls.has(url) &&
+        !attemptedUrls.has(url),
+    )
+    .sort(
+      (a, b) =>
+        a.article.getBoundingClientRect().top -
+        b.article.getBoundingClientRect().top,
+    );
+
+  const directCandidate = [
+    ...new Map(
+      candidates.map((candidate) => [candidate.url, candidate]),
+    ).values(),
+  ][0];
+  if (directCandidate) return directCandidate;
+
+  for (const article of getFeedPostArticles()) {
+    if (article.dataset.daoEduScanned === 'true') continue;
+    if (!article.dataset.daoEduFeedKey) {
+      article.dataset.daoEduFeedKey = `feed-${hash(
+        cleanText(article.innerText).slice(0, 500),
+      )}`;
+    }
+
+    const directUrl =
+      [...article.querySelectorAll('a[href]')]
+        .map(getPostUrlFromLink)
+        .find(Boolean) || '';
+    const candidateKey = directUrl || article.dataset.daoEduFeedKey;
+    if (
+      attemptedUrls.has(candidateKey) ||
+      (directUrl && scannedUrls.has(directUrl))
+    ) {
+      continue;
+    }
+
+    const link = findFeedPostOpener(article, directUrl);
+    if (link) {
+      return { link, url: candidateKey, article };
+    }
+  }
+  return null;
+}
+
+async function openBatchPost(candidate) {
+  const initialUrl = location.href;
+  const existingDialogs = new Set(
+    [...document.querySelectorAll('[role="dialog"]')].filter(isVisible),
+  );
+
+  candidate.link.click();
+  const openedTarget = await waitForValue(() => {
+    const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(
+      isVisible,
+    );
+    const newDialog = dialogs.find((item) => !existingDialogs.has(item));
+    if (newDialog) return { dialog: newDialog };
+    if (
+      isPostUrl(candidate.url) &&
+      normalizePostUrl(location.href) === candidate.url
+    ) {
+      return { dialog: null };
+    }
+    return null;
+  }, 12000);
+
+  if (!openedTarget) {
+    throw new Error('Facebook did not open the selected post.');
+  }
+
+  await sleep(1000);
+  return { initialUrl, dialog: openedTarget.dialog };
+}
+
+async function closeBatchPost(opened) {
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')]
+    .filter(isVisible)
+    .sort(
+      (a, b) =>
+        b.getBoundingClientRect().width * b.getBoundingClientRect().height -
+        a.getBoundingClientRect().width * a.getBoundingClientRect().height,
+    );
+  const dialog = dialogs[0] || opened?.dialog;
+
+  if (dialog instanceof Element) {
+    const closeButton = [...dialog.querySelectorAll('[aria-label], button')]
+      .filter(isVisible)
+      .find((node) => {
+        const label = normalizeUiText(
+          cleanText(
+            node.getAttribute('aria-label') ||
+              node.getAttribute('title') ||
+              node.innerText,
+          ),
+        );
+        return /^(dong|close)$/.test(label);
+      });
+    if (closeButton) closeButton.click();
+    else {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          bubbles: true,
+        }),
+      );
+    }
+    await sleep(900);
+  }
+
+  if (
+    opened?.initialUrl &&
+    location.href !== opened.initialUrl &&
+    isPostUrl(location.href)
+  ) {
+    history.back();
+    await sleep(1200);
+  }
+}
+
+async function incrementContentBatchCounter(key) {
+  const state = await getContentBatchState();
+  return Number(state[key] || 0) + 1;
+}
+
+async function getContentBatchState() {
+  const data = await chrome.storage.local.get(BATCH_STATE_KEY);
+  return data[BATCH_STATE_KEY] || {};
+}
+
+async function updateContentBatchState(patch) {
+  await chrome.storage.local.set({
+    [BATCH_STATE_KEY]: {
+      ...(await getContentBatchState()),
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function waitForValue(factory, timeoutMilliseconds) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMilliseconds) {
+    const value = factory();
+    if (value) return value;
+    await sleep(250);
+  }
+  return null;
+}
+
+async function openScanAndCloseFeedPost(
+  target,
+  maxRounds,
+  maxClicksPerRound,
+) {
+  const normalizedPostUrl = target?.postUrl
+    ? normalizePostUrl(target.postUrl)
+    : '';
+  const feedUrl = location.href;
+  const feedScrollY = window.scrollY;
+  const article = findFeedPostArticle(target);
+  if (!article) {
+    return { ok: false, error: 'Khong tim thay bai viet trong feed.' };
+  }
+
+  article.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  await sleep(650);
+
+  const opener = findFeedPostOpener(article, normalizedPostUrl);
+  if (!opener) {
+    return { ok: false, error: 'Khong tim thay nut mo bai viet.' };
+  }
+
+  const opened = await clickAndWaitForPost(
+    opener,
+    normalizedPostUrl,
+    12000,
+  );
+  if (!opened.mode) {
+    return { ok: false, error: 'Facebook khong mo duoc bai viet de quet sau.' };
+  }
+
+  try {
+    const result = await deepScanCurrentPost(maxRounds, maxClicksPerRound);
+    if (!result?.ok) return result;
+
+    await saveScanResultLocally(result);
+    await markPostScannedLocally(result.summary.postUrl);
+    markArticleScanned(article);
+    return result;
+  } finally {
+    await closeOpenedPost(
+      opened.mode,
+      opened.postUrl || normalizedPostUrl,
+      feedUrl,
+      feedScrollY,
+      opened.dialog || null,
+    );
+    applyScannedMarkers(await getScannedUrlSet());
+  }
+}
+
+function findFeedPostArticle(target) {
+  if (target?.domKey) {
+    const article = document.querySelector(
+      `[role="article"][data-dao-edu-feed-key="${CSS.escape(target.domKey)}"]`,
+    );
+    if (article) return article;
+  }
+
+  if (target?.postUrl) {
+    const normalizedPostUrl = normalizePostUrl(target.postUrl);
+    return getFeedPostArticles().find((article) =>
+      [...article.querySelectorAll('a[href]')].some(
+        (link) => getPostUrlFromLink(link) === normalizedPostUrl,
+      ),
+    );
+  }
+  return null;
+}
+
+function findFeedPostOpener(article, normalizedPostUrl) {
+  if (normalizedPostUrl) {
+    const directLink = [...article.querySelectorAll('a[href]')].find(
+      (link) => getPostUrlFromLink(link) === normalizedPostUrl,
+    );
+    if (directLink) return directLink;
+  }
+
+  const candidates = [
+    ...article.querySelectorAll('a[href], [role="link"], [role="button"]'),
+  ]
+    .filter(isVisible)
+    .filter((node) => !node.closest('[role="dialog"]'))
+    .map((node) => ({
+      node,
+      score: scoreFeedPostOpener(node, article),
+    }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+  return candidates[0]?.node || null;
+}
+
+function scoreFeedPostOpener(node, article) {
+  const label = normalizeUiText(
+    node.getAttribute('aria-label') ||
+      node.getAttribute('title') ||
+      node.innerText ||
+      node.textContent,
+  );
+  const rect = node.getBoundingClientRect();
+  const articleRect = article.getBoundingClientRect();
+  let score = 0;
+
+  if (node.matches('a[href]')) score += 10;
+  if (
+    /^(\d+\s*)?(phut|gio|ngay|tuan|thang|nam|minute|hour|day|week|month|year)s?(\b|$)/.test(
+      label,
+    )
+  ) {
+    score += 100;
+  }
+  if (/\b(202\d|hom qua|yesterday|thu hai|thu ba|thu tu|thu nam|thu sau|chu nhat)\b/.test(label)) {
+    score += 70;
+  }
+  if (node.querySelector('abbr') || node.matches('abbr')) score += 80;
+  if (rect.top < articleRect.top + Math.min(articleRect.height * 0.35, 220)) {
+    score += 20;
+  }
+  if (/^(binh luan|comment|chia se|share|thich|like)(\b|$)/.test(label)) {
+    score -= 100;
+  }
+  if (node.closest('[data-ad-preview="message"], [data-ad-comet-preview="message"]')) {
+    score -= 30;
+  }
+  return score;
+}
+
+async function clickAndWaitForPost(opener, postUrl, timeoutMilliseconds) {
+  const existingDialogs = new Set(
+    [...document.querySelectorAll('[role="dialog"]')].filter(isVisible),
+  );
+  const originalPath = location.pathname;
+  opener.click();
+
+  const expectedId = postUrl ? extractPostId(postUrl) : '';
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMilliseconds) {
+    const dialog = expectedId
+      ? getVisiblePostDialog(expectedId)
+      : [...document.querySelectorAll('[role="dialog"]')]
+          .filter(isVisible)
+          .find((node) => !existingDialogs.has(node));
+    if (dialog) {
+      await sleep(600);
+      return {
+        mode: 'dialog',
+        postUrl: getPostUrlForRoot(dialog),
+        dialog,
+      };
+    }
+    const currentPostUrl = getCanonicalPostUrl();
+    if (
+      isPostUrl(currentPostUrl) &&
+      location.pathname !== originalPath &&
+      (!expectedId || extractPostId(currentPostUrl) === expectedId)
+    ) {
+      await sleep(800);
+      return { mode: 'navigation', postUrl: currentPostUrl, dialog: null };
+    }
+    await sleep(250);
+  }
+  return { mode: '', postUrl: '', dialog: null };
+}
+
+function getVisiblePostDialog(expectedPostId) {
+  return [...document.querySelectorAll('[role="dialog"]')]
+    .filter(isVisible)
+    .find((dialog) =>
+      [...dialog.querySelectorAll('a[href]')].some(
+        (link) => extractPostId(getPostUrlFromLink(link)) === expectedPostId,
+      ),
+    );
+}
+
+async function closeOpenedPost(
+  openMode,
+  postUrl,
+  feedUrl,
+  feedScrollY,
+  openedDialog,
+) {
+  if (openMode === 'dialog') {
+    const expectedPostId = postUrl ? extractPostId(postUrl) : '';
+    const dialog =
+      (openedDialog?.isConnected && isVisible(openedDialog)
+        ? openedDialog
+        : null) ||
+      (expectedPostId ? getVisiblePostDialog(expectedPostId) : null) ||
+      getPostRoot();
+    const closeButton = [...(dialog?.querySelectorAll('[role="button"], button') || [])]
+      .filter(isVisible)
+      .find((node) => {
+        const label = normalizeUiText(
+          node.getAttribute('aria-label') ||
+            node.getAttribute('title') ||
+            node.innerText ||
+            node.textContent,
+        );
+        return /^(dong|close)(\b|$)/.test(label);
+      });
+    if (closeButton) closeButton.click();
+    await waitForDialogToClose(dialog, 2500);
+    if (dialog?.isConnected && isVisible(dialog)) {
+      history.back();
+      await waitForLocation(feedUrl, 10000);
+    }
+  } else {
+    history.back();
+    await waitForLocation(feedUrl, 10000);
+  }
+
+  window.scrollTo({ top: feedScrollY, behavior: 'auto' });
+  await sleep(500);
+}
+
+async function waitForDialogToClose(dialog, timeoutMilliseconds) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMilliseconds) {
+    if (!dialog?.isConnected || !isVisible(dialog)) return;
+    await sleep(200);
+  }
+}
+
+async function waitForLocation(expectedUrl, timeoutMilliseconds) {
+  const expected = new URL(expectedUrl);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMilliseconds) {
+    if (location.pathname === expected.pathname) {
+      await sleep(500);
+      return;
+    }
+    await sleep(250);
+  }
+}
 
 async function saveScanResultLocally(result) {
   const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
@@ -322,9 +852,8 @@ function getPostUrlForRoot(root) {
   if (!(root instanceof Element) || !root.matches('[role="dialog"]')) return '';
 
   const urls = [...root.querySelectorAll('a[href]')]
-    .map((link) => cleanFacebookUrl(link.href))
-    .filter(isPostUrl)
-    .map(normalizePostUrl);
+    .map(getPostUrlFromLink)
+    .filter(Boolean);
   if (!urls.length) return '';
 
   const counts = new Map();
@@ -346,29 +875,174 @@ function getPostRoot() {
 }
 
 function collectPostLinks(scannedUrls, limit) {
+  const excludedKeys = new Set(scannedUrls);
   const scanned = new Set(scannedUrls.map(normalizePostUrl));
   applyScannedMarkers(scanned);
-  const links = [...document.querySelectorAll('a[href]')]
-    .map((link) => link.href)
+  const articleCount = document.querySelectorAll('[role="article"]').length;
+  const allLinks = [...document.querySelectorAll('a[href]')];
+  const feedArticles = getFeedPostArticles();
+  const targets = feedArticles
+    .map((article, index) => {
+      const postUrl =
+        [...article.querySelectorAll('a[href]')]
+          .map(getPostUrlFromLink)
+          .find(Boolean) || '';
+      if (!article.dataset.daoEduFeedKey) {
+        article.dataset.daoEduFeedKey = `feed-${Date.now()}-${index}-${hash(
+          cleanText(article.innerText).slice(0, 300),
+        )}`;
+      }
+      return {
+        domKey: article.dataset.daoEduFeedKey,
+        postUrl,
+        scanned:
+          article.dataset.daoEduScanned === 'true' ||
+          Boolean(postUrl && scanned.has(normalizePostUrl(postUrl))),
+      };
+    })
     .filter(
-      (href) =>
-        /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(href) &&
-        !href.includes('comment_id='),
-    )
-    .map(normalizePostUrl);
+      (target) =>
+        !target.scanned &&
+        !excludedKeys.has(target.domKey) &&
+        !excludedKeys.has(target.postUrl),
+    );
 
   return {
     ok: true,
-    urls: [...new Set(links)]
-      .filter((url) => !scanned.has(url))
-      .slice(0, limit),
+    targets: targets.slice(0, limit),
     groupUrl: getGroupUrl(),
+    diagnostics: {
+      articleCount,
+      anchorCount: allLinks.length,
+      feedPostCount: feedArticles.length,
+      detectedPostCount: targets.filter((target) => target.postUrl).length,
+      scannedVisibleCount: feedArticles.length - targets.length,
+      unscannedPostCount: targets.length,
+      pathname: location.pathname,
+    },
   };
+}
+
+function getFeedPostArticles() {
+  return [...document.querySelectorAll('[role="article"]')]
+    .filter((article) => {
+      if (!isVisible(article) || article.closest('[role="dialog"]')) return false;
+      if (article.parentElement?.closest('[role="article"]')) return false;
+
+      const rect = article.getBoundingClientRect();
+      if (rect.width < 420 || rect.height < 140) return false;
+
+      const hasContent = Boolean(
+        article.querySelector(
+          '[data-ad-preview="message"], [data-ad-comet-preview="message"], [dir="auto"]',
+        ),
+      );
+      const controls = [...article.querySelectorAll('[role="button"], button')]
+        .map((node) =>
+          normalizeUiText(
+            node.getAttribute('aria-label') ||
+              node.innerText ||
+              node.textContent,
+          ),
+        )
+        .join(' ');
+      const hasPostControls =
+        /\b(binh luan|comment)\b/.test(controls) &&
+        /\b(chia se|share|thich|like)\b/.test(controls);
+      return hasContent && hasPostControls;
+    })
+    .sort(
+      (a, b) =>
+        a.getBoundingClientRect().top - b.getBoundingClientRect().top,
+    );
+}
+
+function markArticleScanned(article) {
+  if (!(article instanceof Element)) return;
+  article.dataset.daoEduScanned = 'true';
+  if (article.querySelector('[data-dao-edu-scan-badge="true"]')) return;
+
+  const badge = document.createElement('div');
+  badge.textContent = 'DAO EDU: Da quet';
+  badge.dataset.daoEduScanBadge = 'true';
+  Object.assign(badge.style, {
+    position: 'absolute',
+    top: '8px',
+    right: '8px',
+    zIndex: '20',
+    padding: '5px 8px',
+    borderRadius: '999px',
+    color: '#ffffff',
+    background: '#15803d',
+    fontSize: '11px',
+    fontWeight: '700',
+    boxShadow: '0 2px 8px rgba(0,0,0,.18)',
+  });
+
+  if (window.getComputedStyle(article).position === 'static') {
+    article.style.position = 'relative';
+  }
+  article.appendChild(badge);
+}
+
+function getPostUrlFromLink(link) {
+  if (!(link instanceof HTMLAnchorElement)) return '';
+
+  const values = [
+    link.href,
+    link.getAttribute('href') || '',
+    link.getAttribute('data-lynx-uri') || '',
+  ];
+  for (const value of values) {
+    const postUrl = extractGroupPostUrl(value);
+    if (postUrl) return postUrl;
+  }
+  return '';
+}
+
+function extractGroupPostUrl(value) {
+  if (!value) return '';
+  try {
+    const url = new URL(value, location.origin);
+    const directMatch = url.pathname.match(
+      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+    );
+    if (directMatch) {
+      return normalizePostUrl(
+        `https://www.facebook.com/groups/${directMatch[1]}/posts/${directMatch[2]}/`,
+      );
+    }
+
+    for (const redirectKey of ['u', 'url', 'href']) {
+      const redirected = url.searchParams.get(redirectKey);
+      if (redirected && redirected !== value) {
+        const redirectedPostUrl = extractGroupPostUrl(redirected);
+        if (redirectedPostUrl) return redirectedPostUrl;
+      }
+    }
+
+    const groupId = location.pathname.match(/^\/groups\/([^/]+)/)?.[1] || '';
+    const postId =
+      url.searchParams.get('story_fbid') ||
+      url.searchParams.get('multi_permalinks') ||
+      url.searchParams.get('post_id') ||
+      url.searchParams.get('set')?.match(/^gm\.(\d+)$/)?.[1] ||
+      '';
+    if (groupId && /^\d+$/.test(postId)) {
+      return normalizePostUrl(
+        `https://www.facebook.com/groups/${groupId}/posts/${postId}/`,
+      );
+    }
+  } catch {
+    return '';
+  }
+  return '';
 }
 
 function applyScannedMarkers(scanned) {
   for (const link of document.querySelectorAll('a[href]')) {
-    const normalized = normalizePostUrl(link.href);
+    const normalized = getPostUrlFromLink(link);
+    if (!normalized) continue;
     if (!scanned.has(normalized)) continue;
 
     const article = link.closest('[role="article"]');
