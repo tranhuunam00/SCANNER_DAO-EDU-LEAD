@@ -4,7 +4,13 @@ const POST_SCAN_TIMEOUT_MS = 45000;
 const activeScanTabsByJob = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
-  await setBatchState(createIdleState());
+  const data = await chrome.storage.local.get(BATCH_STATE_KEY);
+  const state = data[BATCH_STATE_KEY];
+  if (state?.status === 'RUNNING') {
+    await stopBatch();
+    return;
+  }
+  if (!state) await setBatchState(createIdleState());
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
