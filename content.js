@@ -437,7 +437,7 @@ function scanCurrentPost() {
     const root = getPostRoot();
     const postUrl = getCanonicalPostUrl();
     const post = parseOriginalPost(root, postUrl);
-    const comments = parseAllComments(root, post?.fingerprint || null, postUrl);
+    const comments = parseAllComments(root, post, postUrl);
     const items = uniqueByFingerprint([post, ...comments].filter(Boolean));
 
     return {
@@ -528,12 +528,22 @@ function parseOriginalPost(root, postUrl) {
   const messageNodes = [
     ...root.querySelectorAll('[data-ad-preview="message"]'),
     ...root.querySelectorAll('[data-ad-comet-preview="message"]'),
-  ].filter((node) => !node.closest('[role="article"]'));
+  ];
 
   const messageNode = messageNodes
-    .map((node) => ({ node, text: cleanText(node.innerText) }))
+    .map((node) => ({
+      node,
+      text: cleanText(node.innerText),
+      isInsideComment: Boolean(
+        findCommentPermalink(node.closest('[role="article"]')),
+      ),
+    }))
     .filter(({ text }) => isUsefulContent(text))
-    .sort((a, b) => b.text.length - a.text.length)[0];
+    .sort(
+      (a, b) =>
+        Number(a.isInsideComment) - Number(b.isInsideComment) ||
+        b.text.length - a.text.length,
+    )[0];
 
   if (!messageNode) return null;
 
@@ -545,6 +555,12 @@ function parseOriginalPost(root, postUrl) {
     text: messageNode.text,
     sourceUrl: postUrl,
     parentFingerprint: null,
+    postId: extractPostId(postUrl),
+    commentId: null,
+    parentCommentId: null,
+    depth: 0,
+    treePath: '',
+    contextTexts: [messageNode.text],
   });
 }
 
@@ -562,21 +578,48 @@ function findPostContainer(messageNode, root) {
   return messageNode.parentElement || root;
 }
 
-function parseAllComments(root, parentFingerprint, postUrl) {
+function parseAllComments(root, post, postUrl) {
   const articleNodes = [...root.querySelectorAll('[role="article"]')].filter(
-    (node) => isVisible(node) && cleanText(node.innerText).length >= 2,
+    (node) =>
+      isVisible(node) &&
+      cleanText(node.innerText).length >= 2 &&
+      !isOriginalPostArticle(node),
   );
+  const postId = extractPostId(postUrl);
+  const postText = post?.text || '';
+  const parsedByArticle = new Map();
 
-  const parsed = articleNodes
-    .map((article) =>
-      parseCommentArticle(article, parentFingerprint, postUrl),
-    )
-    .filter(Boolean);
+  for (const article of articleNodes) {
+    const parentArticle = findParentCommentArticle(article, root);
+    const parentItem = parentArticle
+      ? parsedByArticle.get(parentArticle) || null
+      : null;
+    const item = parseCommentArticle(article, {
+      parentFingerprint: post?.fingerprint || null,
+      postUrl,
+      postId,
+      postText,
+      parentItem,
+    });
+    if (item) parsedByArticle.set(article, item);
+  }
 
-  return uniqueByFingerprint(parsed);
+  return uniqueByFingerprint([...parsedByArticle.values()]);
 }
 
-function parseCommentArticle(article, parentFingerprint, postUrl) {
+function isOriginalPostArticle(article) {
+  const ownScope = cloneWithoutNestedArticles(article);
+  return Boolean(
+    ownScope.querySelector(
+      '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
+    ),
+  );
+}
+
+function parseCommentArticle(
+  article,
+  { parentFingerprint, postUrl, postId, postText, parentItem },
+) {
   const ownScope = cloneWithoutNestedArticles(article);
   const author = findAuthor(ownScope);
   const text = extractCommentText(ownScope, author.name);
@@ -584,16 +627,35 @@ function parseCommentArticle(article, parentFingerprint, postUrl) {
   if (!author.name || !text || !isUsefulContent(text)) return null;
 
   const commentUrl =
-    findCommentPermalink(article) ||
+    findCommentPermalink(ownScope) ||
     findCommentPermalink(article.parentElement) ||
     postUrl;
+  const commentId =
+    extractCommentId(commentUrl) ||
+    createLocalCommentId(postId, author, text);
+  const parentCommentId = parentItem?.commentId || null;
+  const depth = parentItem ? parentItem.depth + 1 : 1;
+  const treePath = parentItem?.treePath
+    ? `${parentItem.treePath}|${commentId}`
+    : commentId;
+  const contextTexts = [
+    ...(parentItem?.contextTexts || (postText ? [postText] : [])),
+    text,
+  ];
 
   return createItem({
     kind: 'COMMENT',
     author,
     text,
     sourceUrl: commentUrl,
-    parentFingerprint,
+    parentFingerprint: parentItem?.fingerprint || parentFingerprint,
+    postId,
+    commentId,
+    parentCommentId,
+    depth,
+    treePath,
+    contextTexts,
+    replyToAuthor: parentItem?.authorName || '',
   });
 }
 
@@ -603,29 +665,85 @@ function createItem({
   text,
   sourceUrl,
   parentFingerprint,
+  postId,
+  commentId,
+  parentCommentId,
+  depth,
+  treePath,
+  contextTexts,
+  replyToAuthor = '',
 }) {
   const capturedAt = new Date().toISOString();
+  const sourceUrlValue = cleanFacebookUrl(sourceUrl);
+  const fingerprint = hash(
+    [
+      kind,
+      sourceUrlValue,
+      cleanFacebookUrl(author.url) || author.name,
+      text.slice(0, 500),
+    ].join('|'),
+  );
   return {
-    parserVersion: 4,
+    parserVersion: 5,
     kind,
     source: 'FACEBOOK_GROUP',
     groupUrl: getGroupUrl(),
     pageUrl: getCanonicalPostUrl(),
-    sourceUrl: cleanFacebookUrl(sourceUrl),
+    sourceUrl: sourceUrlValue,
     parentFingerprint,
+    postId: postId || extractPostId(getCanonicalPostUrl()),
+    commentId,
+    parentCommentId,
+    depth,
+    treePath,
+    contextTexts,
+    replyToAuthor,
     authorName: author.name,
     authorUrl: cleanFacebookUrl(author.url),
     text,
     capturedAt,
-    fingerprint: hash(
-      [
-        kind,
-        cleanFacebookUrl(sourceUrl),
-        cleanFacebookUrl(author.url) || author.name,
-        text.slice(0, 500),
-      ].join('|'),
-    ),
+    fingerprint,
   };
+}
+
+function findParentCommentArticle(article, root) {
+  let current = article.parentElement;
+  while (current && current !== root) {
+    if (current.matches?.('[role="article"]')) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function extractPostId(value) {
+  try {
+    const url = new URL(value, location.origin);
+    const match = url.pathname.match(
+      /\/groups\/[^/]+\/(?:posts|permalink)\/(\d+)/,
+    );
+    return match?.[1] || hash(normalizePostUrl(value));
+  } catch {
+    return hash(String(value || 'unknown-post'));
+  }
+}
+
+function extractCommentId(value) {
+  try {
+    const url = new URL(value, location.origin);
+    return (
+      url.searchParams.get('reply_comment_id') ||
+      url.searchParams.get('comment_id') ||
+      ''
+    );
+  } catch {
+    return '';
+  }
+}
+
+function createLocalCommentId(postId, author, text) {
+  return `local-${hash(
+    [postId, cleanFacebookUrl(author.url) || author.name, text].join('|'),
+  ).replace('fnv1a-', '')}`;
 }
 
 function extractCommentText(scope, authorName) {

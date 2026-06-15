@@ -53,6 +53,34 @@
 
       <p id="status" class="status">Sẵn sàng.</p>
 
+      <section class="filter-panel">
+        <div class="section-title">
+          <h2>Lọc lead local</h2>
+          <span id="profileCount"></span>
+        </div>
+        <div class="lead-stats">
+          <article>
+            <strong id="potentialCount">0</strong>
+            <span>Tiềm năng</span>
+          </article>
+          <article>
+            <strong id="teacherAdCount">0</strong>
+            <span>GV quảng cáo</span>
+          </article>
+          <article>
+            <strong id="competitorCount">0</strong>
+            <span>Sale đối thủ</span>
+          </article>
+          <article>
+            <strong id="neutralCount">0</strong>
+            <span>Khác</span>
+          </article>
+        </div>
+        <div id="leadPreview" class="lead-preview">
+          <div class="empty">Chưa có dữ liệu để lọc.</div>
+        </div>
+      </section>
+
       <section>
         <div class="section-title">
           <h2>Dữ liệu gần nhất</h2>
@@ -68,6 +96,7 @@
         <button id="clear" class="danger">Xóa dữ liệu</button>
       </footer>
     </main>
+    <script src="lead-filter.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

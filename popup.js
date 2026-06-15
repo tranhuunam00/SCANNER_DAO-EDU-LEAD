@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
+const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
 
 const scanButton = document.getElementById('scan');
 const expandButton = document.getElementById('expand');
@@ -77,6 +78,7 @@ async function runScan(expandComments) {
     await markPostScanned(result.summary.postUrl);
 
     render(merged, meta);
+    await analyzeAndRenderLeads(merged);
     const postNote = result.summary.postDetected
       ? ''
       : ' Không thấy nội dung chữ của bài gốc nên không tạo bản ghi bài viết.';
@@ -92,7 +94,9 @@ async function runScan(expandComments) {
 
 async function loadStoredData() {
   const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
-  render(data[STORAGE_KEY] || [], data[META_KEY] || null);
+  const items = data[STORAGE_KEY] || [];
+  render(items, data[META_KEY] || null);
+  await analyzeAndRenderLeads(items);
 }
 
 async function getStoredItems() {
@@ -158,13 +162,69 @@ function render(items, meta) {
     .join('');
 }
 
+async function analyzeAndRenderLeads(items) {
+  const analysis = window.DaoEduLeadFilter.analyze(items);
+  await chrome.storage.local.set({ [LEAD_ANALYSIS_KEY]: analysis });
+  renderLeadAnalysis(analysis);
+}
+
+function renderLeadAnalysis(analysis) {
+  const summary = analysis.summary;
+  const otherCount =
+    summary.RECOMMENDATION + summary.NEUTRAL + summary.SPAM;
+  document.getElementById('potentialCount').textContent =
+    summary.POTENTIAL_PARENT;
+  document.getElementById('teacherAdCount').textContent = summary.TEACHER_AD;
+  document.getElementById('competitorCount').textContent =
+    summary.COMPETITOR_SALE;
+  document.getElementById('neutralCount').textContent = otherCount;
+  document.getElementById('profileCount').textContent =
+    `${summary.totalProfiles} hồ sơ`;
+
+  const leadPreview = document.getElementById('leadPreview');
+  if (!analysis.aiCandidates.length) {
+    leadPreview.innerHTML =
+      '<div class="empty">Chưa tìm thấy lead đủ điểm.</div>';
+    return;
+  }
+
+  leadPreview.innerHTML = analysis.aiCandidates
+    .slice(0, 10)
+    .map((profile) => {
+      const author = profile.authorUrl
+        ? `<a class="author-link" href="${escapeHtml(profile.authorUrl)}" target="_blank">${escapeHtml(profile.authorName)}</a>`
+        : `<strong>${escapeHtml(profile.authorName)}</strong>`;
+      return `
+        <article class="lead-card">
+          <div class="lead-card-top">
+            ${author}
+            <span class="lead-score">${profile.leadScore}/100</span>
+          </div>
+          <p class="lead-reason">${escapeHtml(profile.reasons.join(' · '))}</p>
+        </article>
+      `;
+    })
+    .join('');
+}
+
 async function exportJson() {
-  const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
+  const data = await chrome.storage.local.get([
+    STORAGE_KEY,
+    META_KEY,
+    LEAD_ANALYSIS_KEY,
+  ]);
+  const items = data[STORAGE_KEY] || [];
+  const leadAnalysis =
+    data[LEAD_ANALYSIS_KEY] || window.DaoEduLeadFilter.analyze(items);
   const payload = JSON.stringify(
     {
       exportedAt: new Date().toISOString(),
       meta: data[META_KEY] || null,
-      items: data[STORAGE_KEY] || [],
+      filterVersion: 1,
+      filterSummary: leadAnalysis.summary,
+      aiCandidates: leadAnalysis.aiCandidates,
+      leadProfiles: leadAnalysis.profiles,
+      items,
     },
     null,
     2,
@@ -181,8 +241,13 @@ async function exportJson() {
 }
 
 async function clearStorage() {
-  await chrome.storage.local.remove([STORAGE_KEY, META_KEY]);
+  await chrome.storage.local.remove([
+    STORAGE_KEY,
+    META_KEY,
+    LEAD_ANALYSIS_KEY,
+  ]);
   render([], null);
+  renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
   setStatus('Đã xóa dữ liệu lưu tạm.');
 }
 
