@@ -17,12 +17,17 @@
       </header>
 
       <section class="notice">
-        Chỉ quét nội dung đang hiển thị trong tab Facebook hiện tại.
+        Dán link bài Facebook hoặc để trống để quét sâu bài đang mở.
       </section>
 
       <div class="actions">
-        <button id="scan" class="primary">Quét bài đang mở</button>
-        <button id="expand">Quét sâu toàn bộ bình luận</button>
+        <input
+          id="postUrl"
+          type="url"
+          placeholder="Dán link bài viết Facebook..."
+          autocomplete="off"
+        />
+        <button id="scan" class="primary">Quét sâu bài viết</button>
         <button id="batch" class="batch">Quét 10 bài trong nhóm</button>
         <button id="continueBatch" class="batch hidden">Quét tiếp 10 bài</button>
       </div>

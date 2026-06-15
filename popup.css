@@ -70,6 +70,22 @@ header p {
   gap: 8px;
 }
 
+input {
+  min-height: 40px;
+  width: 100%;
+  padding: 0 11px;
+  border: 1px solid #d1d5db;
+  border-radius: 9px;
+  color: #172033;
+  background: #fff;
+  outline: none;
+}
+
+input:focus {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px #dcfce7;
+}
+
 button {
   min-height: 38px;
   border: 1px solid #d1d5db;

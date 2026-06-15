@@ -49,3 +49,13 @@ Không lưu cookie, mật khẩu hoặc token Facebook.
 
 Nếu nội dung bài chỉ nằm trong ảnh và Facebook không cung cấp caption dạng chữ,
 post vẫn được xuất đúng URL/ID với `missingPostContent: true` và `text` rỗng.
+
+## Quét bài viết
+
+- Dán link bài Facebook rồi bấm **Quét sâu bài viết** để tab hiện tại tự mở
+  bài và quét sâu toàn bộ bình luận.
+- Để trống link để quét sâu bài hoặc dialog Facebook đang mở.
+- **Quét 10 bài trong nhóm** lấy permalink từ trang nhóm, mở từng bài trong tab
+  riêng, chạy cùng pipeline quét sâu, lưu và đánh dấu bài, đóng tab rồi tiếp tục
+  cuộn tìm bài tiếp theo. Batch tự dừng sau tối đa 12 vòng cuộn không có bài mới
+  hoặc 10 phút.

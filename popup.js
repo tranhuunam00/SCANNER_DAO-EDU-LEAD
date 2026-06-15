@@ -2,10 +2,10 @@ const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
-const MIN_PARSER_VERSION = 12;
+const MIN_PARSER_VERSION = 14;
 
 const scanButton = document.getElementById('scan');
-const expandButton = document.getElementById('expand');
+const postUrlInput = document.getElementById('postUrl');
 const exportRawButton = document.getElementById('exportRaw');
 const exportButton = document.getElementById('export');
 const clearButton = document.getElementById('clear');
@@ -15,8 +15,7 @@ const continueBatchButton = document.getElementById('continueBatch');
 const statusNode = document.getElementById('status');
 const previewNode = document.getElementById('preview');
 
-scanButton.addEventListener('click', () => runScan(false));
-expandButton.addEventListener('click', () => runScan(true));
+scanButton.addEventListener('click', runDeepScan);
 exportRawButton.addEventListener('click', exportRawJson);
 exportButton.addEventListener('click', exportJson);
 clearButton.addEventListener('click', clearStorage);
@@ -28,30 +27,32 @@ loadStoredData();
 loadBatchState();
 window.setInterval(loadBatchState, 1000);
 
-async function runScan(expandComments) {
+async function runDeepScan() {
   setBusy(true);
-  setStatus(
-    expandComments
-      ? 'Đang thử mở thêm bình luận...'
-      : 'Đang đọc nội dung trên trang...',
-  );
+  setStatus('Đang quét sâu toàn bộ bình luận...');
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !isFacebookUrl(tab.url)) {
-      throw new Error('Hãy mở riêng một bài viết Facebook trước khi quét.');
+    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const inputUrl = normalizeInputPostUrl(postUrlInput.value);
+    if (postUrlInput.value.trim() && !inputUrl) {
+      throw new Error('Link không hợp lệ. Hãy dán link bài viết Facebook.');
+    }
+    if (!tab?.id) throw new Error('Không tìm thấy tab đang mở.');
+    if (!inputUrl && !isFacebookUrl(tab.url)) {
+      throw new Error('Hãy mở bài viết Facebook hoặc dán link bài cần quét.');
+    }
+    if (inputUrl) {
+      setStatus('Đang mở bài viết từ link...');
+      tab = await chrome.tabs.update(tab.id, { url: inputUrl });
+      await waitForTabComplete(tab.id, inputUrl);
     }
 
     await ensureContentScript(tab.id);
 
-    let clickedExpanders = 0;
-    if (expandComments) {
-      const expansion = await expandAllComments(tab.id);
-      clickedExpanders = expansion.clickedExpanders;
-    }
-
     const result = await chrome.tabs.sendMessage(tab.id, {
-      type: 'SCAN_VISIBLE_CONTENT',
+      type: 'DEEP_SCAN_CURRENT_POST',
+      maxRounds: 20,
+      maxClicksPerRound: 40,
     });
 
     if (!result?.ok) {
@@ -69,7 +70,7 @@ async function runScan(expandComments) {
       pageTitle: tab.title || '',
       lastPostCount: result.summary.posts,
       lastCommentCount: result.summary.comments,
-      clickedExpanders,
+      clickedExpanders: result.summary.clickedExpanders || 0,
       visibleArticles: result.summary.visibleArticles,
       topLevelArticles: result.summary.topLevelArticles,
       postDetected: result.summary.postDetected,
@@ -86,7 +87,7 @@ async function runScan(expandComments) {
     await analyzeAndRenderLeads(merged);
     const postNote = result.summary.postDetected
       ? ''
-      : ' Không thấy nội dung chữ của bài gốc nên không tạo bản ghi bài viết.';
+      : ' Không thấy nội dung chữ của bài gốc nên đã lưu post rỗng.';
     setStatus(
       `Đã quét ${result.summary.posts} bài và ${result.summary.comments} bình luận.${postNote}`,
     );
@@ -375,7 +376,7 @@ async function clearAllCache() {
 
 function setBusy(busy) {
   scanButton.disabled = busy;
-  expandButton.disabled = busy;
+  postUrlInput.disabled = busy;
   exportRawButton.disabled = busy;
   exportButton.disabled = busy;
   batchButton.disabled = busy;
@@ -399,46 +400,6 @@ function escapeHtml(value) {
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function expandAllComments(tabId) {
-  const maxRounds = 10;
-  let clickedExpanders = 0;
-  let emptyRounds = 0;
-  let previousScrollHeight = 0;
-
-  for (let round = 1; round <= maxRounds; round += 1) {
-    setStatus(
-      `Đang mở bình luận vòng ${round}/${maxRounds}. Đã bấm ${clickedExpanders} nút...`,
-    );
-
-    const result = await chrome.tabs.sendMessage(tabId, {
-      type: 'EXPAND_COMMENTS',
-    });
-    if (!result?.ok) {
-      throw new Error(result?.error || 'Không thể mở bình luận.');
-    }
-
-    const clickedThisRound = result.clickedExpanders || 0;
-    clickedExpanders += clickedThisRound;
-    const grew = (result.scrollHeight || 0) > previousScrollHeight;
-    previousScrollHeight = Math.max(
-      previousScrollHeight,
-      result.scrollHeight || 0,
-    );
-
-    if (clickedThisRound === 0 && !grew) emptyRounds += 1;
-    else emptyRounds = 0;
-
-    if (emptyRounds >= 2) break;
-    await sleep(clickedThisRound > 0 ? 1800 : 1000);
-  }
-
-  setStatus(
-    `Đã mở ${clickedExpanders} nút bình luận/phản hồi. Đang tổng hợp dữ liệu...`,
-  );
-  await sleep(800);
-  return { clickedExpanders };
 }
 
 function isFacebookUrl(value) {
@@ -469,6 +430,55 @@ async function ensureContentScript(tabId) {
     files: ['content.js'],
   });
   await sleep(150);
+}
+
+function normalizeInputPostUrl(value) {
+  const input = String(value || '').trim();
+  if (!input) return '';
+  try {
+    const url = new URL(input);
+    if (
+      !['www.facebook.com', 'web.facebook.com', 'm.facebook.com'].includes(
+        url.hostname,
+      ) ||
+      !/\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(url.pathname)
+    ) {
+      return '';
+    }
+    url.hostname = 'www.facebook.com';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+async function waitForTabComplete(tabId, expectedUrl) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 20000) {
+    const tab = await chrome.tabs.get(tabId);
+    if (
+      tab.status === 'complete' &&
+      getPostIdentity(tab.url) === getPostIdentity(expectedUrl)
+    ) {
+      await sleep(800);
+      return;
+    }
+    await sleep(250);
+  }
+  throw new Error('Facebook tải bài viết quá lâu. Hãy thử lại.');
+}
+
+function getPostIdentity(value) {
+  try {
+    const match = new URL(value).pathname.match(
+      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+    );
+    return match ? `${match[1]}:${match[2]}` : '';
+  } catch {
+    return '';
+  }
 }
 
 async function startBatch(continueBatch) {
@@ -533,6 +543,13 @@ async function loadBatchState() {
 function normalizePostUrl(value) {
   try {
     const url = new URL(value);
+    const match = url.pathname.match(
+      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+    );
+    if (match) {
+      url.hostname = 'www.facebook.com';
+      url.pathname = `/groups/${match[1]}/posts/${match[2]}/`;
+    }
     url.search = '';
     url.hash = '';
     return url.toString();

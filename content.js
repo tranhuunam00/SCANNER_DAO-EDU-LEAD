@@ -15,18 +15,10 @@ const EXPAND_TEXT_PATTERNS = [
 const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
-const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-let groupBatchRunning = false;
-let activePostSnapshot = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'PING_SCANNER') {
     sendResponse({ ok: true });
-    return;
-  }
-
-  if (message?.type === 'SCAN_VISIBLE_CONTENT') {
-    sendResponse(scanCurrentPost());
     return;
   }
 
@@ -35,15 +27,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       collectPostLinks(message.scannedUrls || [], message.limit || 100),
     );
     return;
-  }
-
-  if (message?.type === 'EXPAND_COMMENTS') {
-    expandCommentRound(30)
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({ ok: false, error: error.message || String(error) }),
-      );
-    return true;
   }
 
   if (message?.type === 'DEEP_SCAN_CURRENT_POST') {
@@ -58,250 +41,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'RUN_GROUP_BATCH') {
-    if (groupBatchRunning) {
-      sendResponse({ ok: false, error: 'Batch scan is already running.' });
-      return;
-    }
-
-    groupBatchRunning = true;
-    sendResponse({ ok: true });
-    runGroupBatch(Number(message.limit) || 10)
+  if (message?.type === 'DEEP_SCAN_AND_SAVE_CURRENT_POST') {
+    deepScanCurrentPost(
+      Number(message.maxRounds) || 20,
+      Number(message.maxClicksPerRound) || 40,
+    )
+      .then(async (result) => {
+        if (!result?.ok) return result;
+        await saveScanResultLocally(result);
+        await markPostScannedLocally(result.summary.postUrl);
+        return result;
+      })
+      .then(sendResponse)
       .catch((error) =>
-        updateBatchState({
-          status: 'ERROR',
-          message: error.message || String(error),
-        }),
-      )
-      .finally(() => {
-        groupBatchRunning = false;
-      });
+        sendResponse({ ok: false, error: error.message || String(error) }),
+      );
+    return true;
+  }
+
+  if (message?.type === 'SCROLL_GROUP_FEED') {
+    window.scrollBy({
+      top: Math.max(window.innerHeight * 0.9, 750),
+      behavior: 'smooth',
+    });
+    sendResponse({ ok: true });
+    return;
   }
 });
-
-async function runGroupBatch(limit) {
-  const attemptedUrls = new Set();
-  let completed = 0;
-  let failed = 0;
-  let emptyScrollRounds = 0;
-  let previousPageHeight = document.documentElement.scrollHeight;
-
-  while (completed < limit && emptyScrollRounds < 8) {
-    const scannedUrls = await getScannedUrlSet();
-    applyScannedMarkers(scannedUrls);
-
-    const candidate = findNextUnscannedPost(scannedUrls, attemptedUrls);
-    if (!candidate) {
-      await updateBatchState({
-        current: completed,
-        message: `Dang cuon tim bai chua quet (${completed}/${limit})...`,
-      });
-      window.scrollBy({
-        top: Math.max(window.innerHeight * 0.85, 650),
-        behavior: 'smooth',
-      });
-      await sleep(1800);
-
-      const pageHeight = document.documentElement.scrollHeight;
-      emptyScrollRounds =
-        pageHeight <= previousPageHeight ? emptyScrollRounds + 1 : 0;
-      previousPageHeight = Math.max(previousPageHeight, pageHeight);
-      continue;
-    }
-
-    emptyScrollRounds = 0;
-    attemptedUrls.add(candidate.url);
-    candidate.article.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    await sleep(700);
-
-    await updateBatchState({
-      current: completed + 1,
-      message: `Dang mo va quet sau bai ${completed + 1}/${limit}...`,
-      activePostUrl: candidate.url,
-    });
-
-    try {
-      activePostSnapshot = createPostSnapshot(
-        candidate.article,
-        candidate.url,
-      );
-      const opened = await openPost(candidate);
-      const result = await deepScanCurrentPost(20, 40);
-      if (!result?.ok) {
-        throw new Error(result?.error || 'Khong doc duoc bai viet.');
-      }
-
-      await saveScanResultLocally(result);
-      await markPostScannedLocally(candidate.url);
-      completed += 1;
-
-      await updateBatchState({
-        current: completed,
-        processedTotal: await incrementBatchCounter('processedTotal'),
-        lastResult: {
-          postUrl: candidate.url,
-          posts: result.summary.posts,
-          comments: result.summary.comments,
-          clickedExpanders: result.summary.clickedExpanders,
-        },
-        message: `Da quet bai ${completed}/${limit}: ${result.summary.comments} binh luan.`,
-      });
-
-      await closeOpenedPost(opened);
-      activePostSnapshot = null;
-      applyScannedMarkers(await getScannedUrlSet());
-      await sleep(900);
-    } catch (error) {
-      failed += 1;
-      await updateBatchState({
-        failedTotal: await incrementBatchCounter('failedTotal'),
-        lastResult: {
-          postUrl: candidate.url,
-          error: error.message || String(error),
-        },
-        message: `Bo qua mot bai loi: ${error.message || String(error)}`,
-      });
-      await closeOpenedPost({ initialUrl: location.href }).catch(() => {});
-      activePostSnapshot = null;
-      await sleep(700);
-    }
-  }
-
-  const reachedLimit = completed >= limit;
-  await updateBatchState({
-    status: reachedLimit ? 'AWAITING_CONTINUE' : 'DONE',
-    current: completed,
-    activePostUrl: null,
-    message: reachedLimit
-      ? `Da quet du ${limit} bai. Ban co muon quet tiep 10 bai khong?`
-      : `Da quet ${completed} bai, loi ${failed}. Khong tim thay bai moi sau khi cuon.`,
-  });
-}
-
-function findNextUnscannedPost(scannedUrls, attemptedUrls) {
-  const candidates = [...document.querySelectorAll('a[href]')]
-    .map((link) => {
-      const url = normalizePostUrl(link.href);
-      const article = findPostArticleForLink(link, url);
-      return { link, url, article };
-    })
-    .filter(
-      ({ link, url, article }) =>
-        article &&
-        !link.closest('[role="dialog"]') &&
-        isPostUrl(url) &&
-        isDirectPostLink(link.href, url) &&
-        !scannedUrls.has(url) &&
-        !attemptedUrls.has(url),
-    )
-    .sort(
-      (a, b) =>
-        a.article.getBoundingClientRect().top -
-        b.article.getBoundingClientRect().top,
-    );
-
-  return (
-    [...new Map(candidates.map((candidate) => [candidate.url, candidate])).values()][0] ||
-    null
-  );
-}
-
-function findPostArticleForLink(node, normalizedPostUrl) {
-  let current = node instanceof Element ? node : null;
-  const candidates = [];
-
-  while (current && current !== document.body) {
-    if (current.matches?.('[role="article"]')) {
-      const ownScope = cloneWithoutNestedArticles(current);
-      const hasDirectPostLink = [...ownScope.querySelectorAll('a[href]')].some(
-        (link) => isDirectPostLink(link.href, normalizedPostUrl),
-      );
-      if (hasDirectPostLink && !findCommentPermalink(ownScope)) {
-        const rect = current.getBoundingClientRect();
-        candidates.push({
-          article: current,
-          area: rect.width * rect.height,
-        });
-      }
-    }
-    current = current.parentElement;
-  }
-
-  return candidates.sort((a, b) => b.area - a.area)[0]?.article || null;
-}
-
-async function openPost(candidate) {
-  const initialUrl = location.href;
-  const existingDialogs = new Set(
-    [...document.querySelectorAll('[role="dialog"]')].filter(isVisible),
-  );
-
-  candidate.link.click();
-  const openedTarget = await waitForValue(() => {
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(
-      isVisible,
-    );
-    const newDialog = dialogs.find((item) => !existingDialogs.has(item));
-    if (newDialog) return { dialog: newDialog };
-    if (normalizePostUrl(location.href) === candidate.url) {
-      return { dialog: null };
-    }
-    return null;
-  }, 12000);
-
-  if (!openedTarget) {
-    throw new Error('Facebook did not open the selected post.');
-  }
-
-  await sleep(1000);
-  return { initialUrl, dialog: openedTarget.dialog };
-}
-
-async function closeOpenedPost(opened) {
-  const dialogs = [...document.querySelectorAll('[role="dialog"]')]
-    .filter(isVisible)
-    .sort(
-      (a, b) =>
-        b.getBoundingClientRect().width * b.getBoundingClientRect().height -
-        a.getBoundingClientRect().width * a.getBoundingClientRect().height,
-    );
-  const dialog = dialogs[0] || opened?.dialog;
-
-  if (dialog instanceof Element) {
-    const closeButton = [...dialog.querySelectorAll('[aria-label], button')]
-      .filter(isVisible)
-      .find((node) => {
-        const label = normalizeUiText(
-          cleanText(
-            node.getAttribute('aria-label') ||
-              node.getAttribute('title') ||
-              node.innerText,
-          ),
-        );
-        return /^(dong|close)$/.test(label);
-      });
-    if (closeButton) closeButton.click();
-    else {
-      document.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Escape',
-          code: 'Escape',
-          bubbles: true,
-        }),
-      );
-    }
-    await sleep(900);
-  }
-
-  if (
-    opened?.initialUrl &&
-    location.href !== opened.initialUrl &&
-    isPostUrl(location.href)
-  ) {
-    history.back();
-    await sleep(1200);
-  }
-}
 
 async function saveScanResultLocally(result) {
   const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
@@ -309,7 +75,7 @@ async function saveScanResultLocally(result) {
   const currentPostId = result.summary.postId;
   const retained = existing.filter(
     (item) =>
-      Number(item.parserVersion || 0) >= 12 &&
+      Number(item.parserVersion || 0) >= 14 &&
       isPostUrl(item.pageUrl) &&
       item.pageUrl !== result.summary.postUrl &&
       item.postId !== currentPostId,
@@ -350,36 +116,6 @@ async function getScannedUrlSet() {
   );
 }
 
-async function incrementBatchCounter(key) {
-  const state = await getBatchState();
-  return Number(state[key] || 0) + 1;
-}
-
-async function getBatchState() {
-  const data = await chrome.storage.local.get(BATCH_STATE_KEY);
-  return data[BATCH_STATE_KEY] || {};
-}
-
-async function updateBatchState(patch) {
-  await chrome.storage.local.set({
-    [BATCH_STATE_KEY]: {
-      ...(await getBatchState()),
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    },
-  });
-}
-
-async function waitForValue(factory, timeoutMilliseconds) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMilliseconds) {
-    const value = factory();
-    if (value) return value;
-    await sleep(250);
-  }
-  return null;
-}
-
 function isPostUrl(value) {
   try {
     return /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(
@@ -396,6 +132,11 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
   let clickedExpanders = 0;
   let emptyRounds = 0;
   let previousScrollHeight = 0;
+  const collected = new Map();
+  let latestSummary = null;
+  let lastScanError = '';
+
+  collectScanSnapshot();
 
   for (let round = 1; round <= maxRounds; round += 1) {
     const result = await expandCommentRound(maxClicksPerRound);
@@ -408,19 +149,56 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
 
     if (emptyRounds >= 2) break;
     await sleep(result.clickedExpanders > 0 ? 1600 : 900);
+    collectScanSnapshot();
   }
 
   await sleep(700);
-  const scan = scanCurrentPost();
-  if (!scan.ok) return scan;
+  collectScanSnapshot();
+  if (!latestSummary) {
+    return {
+      ok: false,
+      error: lastScanError || 'Khong doc duoc bai viet dang mo.',
+    };
+  }
+
+  const collectedItems = [...collected.values()];
+  const post = collectedItems.find((item) => item.kind === 'POST') || null;
+  const comments = resolveCommentRelationships(
+    collectedItems.filter((item) => item.kind === 'COMMENT'),
+    post,
+  );
+  const items = [post, ...comments].filter(Boolean);
+  const commentCount = comments.length;
+  const posts = post ? 1 : 0;
 
   return {
-    ...scan,
+    ok: true,
+    items,
     summary: {
-      ...scan.summary,
+      ...latestSummary,
+      posts,
+      comments: commentCount,
       clickedExpanders,
     },
   };
+
+  function collectScanSnapshot() {
+    const scan = scanCurrentPost();
+    if (!scan.ok) {
+      lastScanError = scan.error || '';
+      return;
+    }
+    latestSummary = scan.summary;
+    for (const item of scan.items) {
+      const existing = collected.get(item.fingerprint);
+      const shouldReplace =
+        !existing ||
+        (item.kind === 'POST' && !existing.text && item.text) ||
+        (item.kind === 'COMMENT' &&
+          Number(item.depth || 0) > Number(existing.depth || 0));
+      if (shouldReplace) collected.set(item.fingerprint, item);
+    }
+  }
 }
 
 async function expandCommentRound(maxClicks) {
@@ -476,17 +254,17 @@ async function waitForPostContent(timeoutMilliseconds) {
 function scanCurrentPost() {
   try {
     const root = getPostRoot();
-    const postUrl =
-      activePostSnapshot?.postUrl || getCanonicalPostUrl();
-    const expectedPostId = extractPostId(postUrl);
-    const post = parseOriginalPost(root, postUrl, activePostSnapshot);
-    const comments = parseAllComments(root, post, postUrl);
-    const foreignComments = comments.filter(
-      (comment) => comment.postId !== expectedPostId,
-    );
-    if (foreignComments.length) {
-      throw new Error('Detected comments from another Facebook post.');
+    const postUrl = getPostUrlForRoot(root);
+    if (!isPostUrl(postUrl)) {
+      throw new Error(
+        'Hay mo rieng mot bai viet hoac mo dialog bai viet truoc khi quet.',
+      );
     }
+    const expectedPostId = extractPostId(postUrl);
+    const post = parseOriginalPost(root, postUrl);
+    const comments = parseAllComments(root, post, postUrl).filter(
+      (comment) => comment.postId === expectedPostId,
+    );
     const items = uniqueByFingerprint([post, ...comments].filter(Boolean));
 
     return {
@@ -500,12 +278,28 @@ function scanCurrentPost() {
         groupUrl: getGroupUrl(),
         postUrl,
         postId: expectedPostId,
-        postDetected: Boolean(post),
+        postDetected: Boolean(post?.text),
       },
     };
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   }
+}
+
+function getPostUrlForRoot(root) {
+  const currentUrl = getCanonicalPostUrl();
+  if (isPostUrl(currentUrl)) return currentUrl;
+  if (!(root instanceof Element) || !root.matches('[role="dialog"]')) return '';
+
+  const urls = [...root.querySelectorAll('a[href]')]
+    .map((link) => cleanFacebookUrl(link.href))
+    .filter(isPostUrl)
+    .map(normalizePostUrl);
+  if (!urls.length) return '';
+
+  const counts = new Map();
+  for (const url of urls) counts.set(url, Number(counts.get(url) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
 function getPostRoot() {
@@ -575,10 +369,7 @@ function applyScannedMarkers(scanned) {
 }
 
 function parseOriginalPost(root, postUrl, snapshot = null) {
-  if (snapshot) {
-    if (!snapshot.text) {
-      return createMissingOriginalPost(postUrl, snapshot.author);
-    }
+  if (snapshot?.text) {
     return createItem({
       kind: 'POST',
       author: snapshot.author,
@@ -601,16 +392,13 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
   const originalPostArticle = findOriginalPostArticle(root, postUrl);
 
   const messageNode = messageNodes
-    .map((node) => {
-      const article = node.closest('[role="article"]');
-      return {
-        node,
-        text: cleanText(node.innerText),
-        belongsToOriginalPost:
-          article === originalPostArticle &&
-          isNodeBeforePostInteraction(node, root),
-      };
-    })
+    .map((node) => ({
+      node,
+      text: cleanText(node.innerText),
+      belongsToOriginalPost:
+        originalPostArticle &&
+        node.closest('[role="article"]') === originalPostArticle,
+    }))
     .filter(
       ({ text, belongsToOriginalPost }) =>
         belongsToOriginalPost && isUsefulContent(text),
@@ -618,11 +406,7 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     .sort((a, b) => b.text.length - a.text.length)[0];
 
   const fallbackArticle = originalPostArticle;
-  const layoutText = extractPostTextBeforeInteraction(
-    root,
-    originalPostArticle,
-  );
-  if (!messageNode && !layoutText) {
+  if (!messageNode) {
     return isPostUrl(postUrl)
       ? createMissingOriginalPost(postUrl, snapshot?.author)
       : null;
@@ -632,7 +416,7 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     ? findPostContainer(messageNode.node, root)
     : fallbackArticle || root;
   const author = findAuthor(container, { preferHeader: true });
-  const text = messageNode?.text || layoutText;
+  const text = messageNode.text;
   return createItem({
     kind: 'POST',
     author,
@@ -646,62 +430,6 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     treePath: '',
     contextTexts: [text],
   });
-}
-
-function extractPostTextBeforeInteraction(root, originalPostArticle) {
-  if (!(root instanceof Element)) return '';
-
-  const firstInteractionTop = getFirstPostInteractionTop(root);
-  if (!Number.isFinite(firstInteractionTop)) return '';
-
-  const candidates = [
-    ...root.querySelectorAll(
-      '[data-ad-preview="message"], [data-ad-comet-preview="message"], [dir="auto"]',
-    ),
-  ]
-    .filter(
-      (node) =>
-        isVisible(node) &&
-        (!node.closest('[role="article"]') ||
-          node.closest('[role="article"]') === originalPostArticle) &&
-        !node.closest('a, button, [role="button"]') &&
-        node.getBoundingClientRect().bottom <= firstInteractionTop,
-    )
-    .map((node) => ({
-      text: cleanText(node.innerText),
-      bottom: node.getBoundingClientRect().bottom,
-    }))
-    .filter(({ text }) => isUsefulContent(text))
-    .filter(({ text }) => !isInterfaceText(text))
-    .filter(({ text }) => !isMetadataText(text))
-    .sort((a, b) => b.bottom - a.bottom || b.text.length - a.text.length);
-
-  return candidates[0]?.text || '';
-}
-
-function isNodeBeforePostInteraction(node, root) {
-  const firstInteractionTop = getFirstPostInteractionTop(root);
-  return (
-    Number.isFinite(firstInteractionTop) &&
-    node.getBoundingClientRect().bottom <= firstInteractionTop
-  );
-}
-
-function getFirstPostInteractionTop(root) {
-  const tops = [...root.querySelectorAll('[role="button"], button')]
-    .filter(isVisible)
-    .filter((node) => {
-      const text = normalizeUiText(
-        node.getAttribute('aria-label') ||
-          node.getAttribute('title') ||
-          node.innerText ||
-          node.textContent,
-      );
-      return /^(thich|binh luan|chia se|like|comment|share)$/.test(text);
-    })
-    .map((node) => node.getBoundingClientRect().top)
-    .filter(Number.isFinite);
-  return tops.length ? Math.min(...tops) : Number.NaN;
 }
 
 function createMissingOriginalPost(postUrl, author = null) {
@@ -720,22 +448,6 @@ function createMissingOriginalPost(postUrl, author = null) {
       contextTexts: [],
     }),
     missingPostContent: true,
-  };
-}
-
-function createPostSnapshot(article, postUrl) {
-  const normalizedPostUrl = normalizePostUrl(postUrl);
-  const ownScope = cloneWithoutNestedArticles(article);
-  const containsDirectPostLink = [...ownScope.querySelectorAll('a[href]')].some(
-    (link) => isDirectPostLink(link.href, normalizedPostUrl),
-  );
-  if (!containsDirectPostLink || findCommentPermalink(ownScope)) return null;
-
-  const text = extractPostTextBeforeInteraction(article, article);
-  return {
-    postUrl,
-    text,
-    author: findAuthor(ownScope, { preferHeader: true }),
   };
 }
 
@@ -760,6 +472,30 @@ function findOriginalPostArticle(root, postUrl) {
       })
       .sort((a, b) => a.top - b.top || b.area - a.area)[0]?.article || null
   );
+}
+
+function findPostArticleForLink(node, normalizedPostUrl) {
+  let current = node instanceof Element ? node : null;
+  const candidates = [];
+
+  while (current && current !== document.body) {
+    if (current.matches?.('[role="article"]')) {
+      const ownScope = cloneWithoutNestedArticles(current);
+      const hasDirectPostLink = [...ownScope.querySelectorAll('a[href]')].some(
+        (link) => isDirectPostLink(link.href, normalizedPostUrl),
+      );
+      if (hasDirectPostLink && !findCommentPermalink(ownScope)) {
+        const rect = current.getBoundingClientRect();
+        candidates.push({
+          article: current,
+          area: rect.width * rect.height,
+        });
+      }
+    }
+    current = current.parentElement;
+  }
+
+  return candidates.sort((a, b) => b.area - a.area)[0]?.article || null;
 }
 
 function findPostContainer(messageNode, root) {
@@ -997,16 +733,16 @@ function createItem({
     ].join('|'),
   );
   return {
-    parserVersion: 12,
+    parserVersion: 14,
     kind,
     source: 'FACEBOOK_GROUP',
     groupUrl: getGroupUrl(),
-    pageUrl: activePostSnapshot?.postUrl || getCanonicalPostUrl(),
+    pageUrl: getCanonicalPostUrl(),
     sourceUrl: sourceUrlValue,
     parentFingerprint,
     postId:
       postId ||
-      extractPostId(activePostSnapshot?.postUrl || getCanonicalPostUrl()),
+      extractPostId(getCanonicalPostUrl()),
     commentId,
     parentCommentId,
     depth,
@@ -1272,6 +1008,13 @@ function findCommentsScrollContainer() {
 function normalizePostUrl(value) {
   try {
     const url = new URL(value, location.origin);
+    const match = url.pathname.match(
+      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+    );
+    if (match) {
+      url.hostname = 'www.facebook.com';
+      url.pathname = `/groups/${match[1]}/posts/${match[2]}/`;
+    }
     url.search = '';
     url.hash = '';
     return url.toString();
