@@ -302,7 +302,7 @@ async function saveScanResultLocally(result) {
   const currentPostId = result.summary.postId;
   const retained = existing.filter(
     (item) =>
-      Number(item.parserVersion || 0) >= 8 &&
+      Number(item.parserVersion || 0) >= 10 &&
       isPostUrl(item.pageUrl) &&
       item.pageUrl !== result.summary.postUrl &&
       item.postId !== currentPostId,
@@ -568,7 +568,10 @@ function applyScannedMarkers(scanned) {
 }
 
 function parseOriginalPost(root, postUrl, snapshot = null) {
-  if (snapshot?.text) {
+  if (snapshot) {
+    if (!snapshot.text) {
+      return createMissingOriginalPost(postUrl, snapshot.author);
+    }
     return createItem({
       kind: 'POST',
       author: snapshot.author,
@@ -588,22 +591,25 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     ...root.querySelectorAll('[data-ad-preview="message"]'),
     ...root.querySelectorAll('[data-ad-comet-preview="message"]'),
   ];
+  const originalPostArticle = findOriginalPostArticle(root, postUrl);
 
   const messageNode = messageNodes
-    .map((node) => ({
-      node,
-      text: cleanText(node.innerText),
-      isInsideComment: Boolean(
-        findCommentPermalink(node.closest('[role="article"]')),
-      ),
-    }))
+    .map((node) => {
+      const article = node.closest('[role="article"]');
+      return {
+        node,
+        text: cleanText(node.innerText),
+        belongsToOriginalPost:
+          !article || article === originalPostArticle,
+      };
+    })
     .filter(
-      ({ text, isInsideComment }) =>
-        !isInsideComment && isUsefulContent(text),
+      ({ text, belongsToOriginalPost }) =>
+        belongsToOriginalPost && isUsefulContent(text),
     )
     .sort((a, b) => b.text.length - a.text.length)[0];
 
-  const fallbackArticle = findOriginalPostArticle(root, postUrl);
+  const fallbackArticle = originalPostArticle;
   const fallbackText = fallbackArticle
     ? extractPostText(fallbackArticle)
     : '';
@@ -674,31 +680,20 @@ function findOriginalPostArticle(root, postUrl) {
     [...root.querySelectorAll('a[href]')]
       .filter((link) => isDirectPostLink(link.href, normalizedPostUrl))
       .map((link) => findPostArticleForLink(link, normalizedPostUrl))
-      .filter((article) => article && isVisible(article)),
+      .filter(Boolean),
   );
 
   return (
     articles
       .map((article) => {
-        const links = [...article.querySelectorAll('a[href]')];
-        const hasPostLink = links.some(
-          (link) => isDirectPostLink(link.href, normalizedPostUrl),
-        );
-        const hasMessage = Boolean(
-          article.querySelector(
-            '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
-          ),
-        );
-        const top = article.getBoundingClientRect().top;
+        const rect = article.getBoundingClientRect();
         return {
           article,
-          score:
-            (hasPostLink ? 30 : 0) +
-            (hasMessage ? 20 : 0) -
-            Math.max(top, 0) / 10000,
+          top: rect.top,
+          area: rect.width * rect.height,
         };
       })
-      .sort((a, b) => b.score - a.score)[0]?.article || null
+      .sort((a, b) => a.top - b.top || b.area - a.area)[0]?.article || null
   );
 }
 
@@ -749,12 +744,13 @@ function findPostContainer(messageNode, root) {
 
 function parseAllComments(root, post, postUrl) {
   const postId = extractPostId(postUrl);
+  const originalPostArticle = findOriginalPostArticle(root, postUrl);
   const articleNodes = [...root.querySelectorAll('[role="article"]')].filter(
     (node) =>
       isVisible(node) &&
       cleanText(node.innerText).length >= 2 &&
-      !isOriginalPostArticle(node) &&
-      articleBelongsToPost(node, postId),
+      node !== originalPostArticle &&
+      articleBelongsToPost(node, postId, root),
   );
   const postText = post?.text || '';
   const parsedByArticle = new Map();
@@ -849,7 +845,7 @@ function resolveCommentRelationships(comments, post) {
   return comments;
 }
 
-function articleBelongsToPost(article, expectedPostId) {
+function articleBelongsToPost(article, expectedPostId, root) {
   const ownScope = cloneWithoutNestedArticles(article);
   const ownPermalink = findCommentPermalink(ownScope);
   if (ownPermalink) {
@@ -868,24 +864,7 @@ function articleBelongsToPost(article, expectedPostId) {
     current = current.parentElement;
   }
 
-  return false;
-}
-
-function isOriginalPostArticle(article) {
-  const ownScope = cloneWithoutNestedArticles(article);
-  return Boolean(
-    ownScope.querySelector(
-      '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
-    ),
-  ) || Boolean(
-    [...ownScope.querySelectorAll('a[href]')].some(
-      (link) =>
-        isDirectPostLink(
-          link.href,
-          normalizePostUrl(getCanonicalPostUrl()),
-        ),
-    ),
-  );
+  return root instanceof Element && root.matches('[role="dialog"]');
 }
 
 function isDirectPostLink(value, normalizedPostUrl) {
@@ -915,7 +894,6 @@ function parseCommentArticle(
 
   const commentUrl =
     findCommentPermalink(ownScope) ||
-    findCommentPermalink(article.parentElement) ||
     postUrl;
   const relation = extractCommentRelation(commentUrl);
   const commentId =
@@ -985,7 +963,7 @@ function createItem({
     ].join('|'),
   );
   return {
-    parserVersion: 8,
+    parserVersion: 10,
     kind,
     source: 'FACEBOOK_GROUP',
     groupUrl: getGroupUrl(),
