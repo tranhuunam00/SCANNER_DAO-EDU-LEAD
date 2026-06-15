@@ -208,6 +208,7 @@ function findNextUnscannedPost(scannedUrls, attemptedUrls) {
 
 function findPostArticleForLink(node, normalizedPostUrl) {
   let current = node instanceof Element ? node : null;
+  const candidates = [];
 
   while (current && current !== document.body) {
     if (current.matches?.('[role="article"]')) {
@@ -215,12 +216,18 @@ function findPostArticleForLink(node, normalizedPostUrl) {
       const hasDirectPostLink = [...ownScope.querySelectorAll('a[href]')].some(
         (link) => isDirectPostLink(link.href, normalizedPostUrl),
       );
-      if (hasDirectPostLink && !findCommentPermalink(ownScope)) return current;
+      if (hasDirectPostLink && !findCommentPermalink(ownScope)) {
+        const rect = current.getBoundingClientRect();
+        candidates.push({
+          article: current,
+          area: rect.width * rect.height,
+        });
+      }
     }
     current = current.parentElement;
   }
 
-  return null;
+  return candidates.sort((a, b) => b.area - a.area)[0]?.article || null;
 }
 
 async function openPost(candidate) {
@@ -302,7 +309,7 @@ async function saveScanResultLocally(result) {
   const currentPostId = result.summary.postId;
   const retained = existing.filter(
     (item) =>
-      Number(item.parserVersion || 0) >= 10 &&
+      Number(item.parserVersion || 0) >= 12 &&
       isPostUrl(item.pageUrl) &&
       item.pageUrl !== result.summary.postUrl &&
       item.postId !== currentPostId,
@@ -600,7 +607,8 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
         node,
         text: cleanText(node.innerText),
         belongsToOriginalPost:
-          !article || article === originalPostArticle,
+          article === originalPostArticle &&
+          isNodeBeforePostInteraction(node, root),
       };
     })
     .filter(
@@ -610,10 +618,11 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     .sort((a, b) => b.text.length - a.text.length)[0];
 
   const fallbackArticle = originalPostArticle;
-  const fallbackText = fallbackArticle
-    ? extractPostText(fallbackArticle)
-    : '';
-  if (!messageNode && !fallbackText) {
+  const layoutText = extractPostTextBeforeInteraction(
+    root,
+    originalPostArticle,
+  );
+  if (!messageNode && !layoutText) {
     return isPostUrl(postUrl)
       ? createMissingOriginalPost(postUrl, snapshot?.author)
       : null;
@@ -621,9 +630,9 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
 
   const container = messageNode
     ? findPostContainer(messageNode.node, root)
-    : fallbackArticle;
+    : fallbackArticle || root;
   const author = findAuthor(container, { preferHeader: true });
-  const text = messageNode?.text || fallbackText;
+  const text = messageNode?.text || layoutText;
   return createItem({
     kind: 'POST',
     author,
@@ -637,6 +646,62 @@ function parseOriginalPost(root, postUrl, snapshot = null) {
     treePath: '',
     contextTexts: [text],
   });
+}
+
+function extractPostTextBeforeInteraction(root, originalPostArticle) {
+  if (!(root instanceof Element)) return '';
+
+  const firstInteractionTop = getFirstPostInteractionTop(root);
+  if (!Number.isFinite(firstInteractionTop)) return '';
+
+  const candidates = [
+    ...root.querySelectorAll(
+      '[data-ad-preview="message"], [data-ad-comet-preview="message"], [dir="auto"]',
+    ),
+  ]
+    .filter(
+      (node) =>
+        isVisible(node) &&
+        (!node.closest('[role="article"]') ||
+          node.closest('[role="article"]') === originalPostArticle) &&
+        !node.closest('a, button, [role="button"]') &&
+        node.getBoundingClientRect().bottom <= firstInteractionTop,
+    )
+    .map((node) => ({
+      text: cleanText(node.innerText),
+      bottom: node.getBoundingClientRect().bottom,
+    }))
+    .filter(({ text }) => isUsefulContent(text))
+    .filter(({ text }) => !isInterfaceText(text))
+    .filter(({ text }) => !isMetadataText(text))
+    .sort((a, b) => b.bottom - a.bottom || b.text.length - a.text.length);
+
+  return candidates[0]?.text || '';
+}
+
+function isNodeBeforePostInteraction(node, root) {
+  const firstInteractionTop = getFirstPostInteractionTop(root);
+  return (
+    Number.isFinite(firstInteractionTop) &&
+    node.getBoundingClientRect().bottom <= firstInteractionTop
+  );
+}
+
+function getFirstPostInteractionTop(root) {
+  const tops = [...root.querySelectorAll('[role="button"], button')]
+    .filter(isVisible)
+    .filter((node) => {
+      const text = normalizeUiText(
+        node.getAttribute('aria-label') ||
+          node.getAttribute('title') ||
+          node.innerText ||
+          node.textContent,
+      );
+      return /^(thich|binh luan|chia se|like|comment|share)$/.test(text);
+    })
+    .map((node) => node.getBoundingClientRect().top)
+    .filter(Number.isFinite);
+  return tops.length ? Math.min(...tops) : Number.NaN;
 }
 
 function createMissingOriginalPost(postUrl, author = null) {
@@ -666,7 +731,7 @@ function createPostSnapshot(article, postUrl) {
   );
   if (!containsDirectPostLink || findCommentPermalink(ownScope)) return null;
 
-  const text = extractPostText(article);
+  const text = extractPostTextBeforeInteraction(article, article);
   return {
     postUrl,
     text,
@@ -695,37 +760,6 @@ function findOriginalPostArticle(root, postUrl) {
       })
       .sort((a, b) => a.top - b.top || b.area - a.area)[0]?.article || null
   );
-}
-
-function extractPostText(container) {
-  if (!(container instanceof Element)) return '';
-  const ownScope = cloneWithoutNestedArticles(container);
-  if (findCommentPermalink(ownScope)) return '';
-
-  const preferred = [
-    ...container.querySelectorAll(
-      '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
-    ),
-  ]
-    .filter((node) => {
-      const nearestArticle = node.closest('[role="article"]');
-      return !nearestArticle || nearestArticle === container;
-    })
-    .map((node) => cleanText(node.innerText))
-    .filter(isUsefulContent);
-  if (preferred.length) {
-    return preferred.sort((a, b) => b.length - a.length)[0];
-  }
-
-  const author = findAuthor(ownScope, { preferHeader: true });
-  const candidates = [...ownScope.querySelectorAll('[dir="auto"]')]
-    .filter((node) => !node.closest('a, button, [role="button"]'))
-    .map((node) => cleanText(node.innerText))
-    .filter((text) => isUsefulContent(text))
-    .filter((text) => text !== author.name)
-    .filter((text) => !isMetadataText(text));
-
-  return candidates.sort((a, b) => b.length - a.length)[0] || '';
 }
 
 function findPostContainer(messageNode, root) {
@@ -963,7 +997,7 @@ function createItem({
     ].join('|'),
   );
   return {
-    parserVersion: 10,
+    parserVersion: 12,
     kind,
     source: 'FACEBOOK_GROUP',
     groupUrl: getGroupUrl(),

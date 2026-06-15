@@ -2,7 +2,7 @@ const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
-const MIN_PARSER_VERSION = 10;
+const MIN_PARSER_VERSION = 12;
 
 const scanButton = document.getElementById('scan');
 const expandButton = document.getElementById('expand');
