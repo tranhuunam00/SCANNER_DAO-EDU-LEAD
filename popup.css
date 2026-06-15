@@ -173,6 +173,20 @@ button.danger {
   line-height: 1.4;
 }
 
+.batch-stop {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 10px;
+  border-color: #fecaca;
+  color: #b91c1c;
+  background: #fff7f7;
+}
+
+.batch-stop:hover {
+  border-color: #ef4444;
+  color: #991b1b;
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

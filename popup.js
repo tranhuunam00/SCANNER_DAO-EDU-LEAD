@@ -12,6 +12,7 @@ const clearButton = document.getElementById('clear');
 const clearAllButton = document.getElementById('clearAll');
 const batchButton = document.getElementById('batch');
 const continueBatchButton = document.getElementById('continueBatch');
+const stopBatchButton = document.getElementById('stopBatch');
 const statusNode = document.getElementById('status');
 const previewNode = document.getElementById('preview');
 
@@ -22,6 +23,7 @@ clearButton.addEventListener('click', clearStorage);
 clearAllButton.addEventListener('click', clearAllCache);
 batchButton.addEventListener('click', () => startBatch(false));
 continueBatchButton.addEventListener('click', () => startBatch(true));
+stopBatchButton.addEventListener('click', () => stopBatchScan(true));
 
 loadStoredData();
 loadBatchState();
@@ -358,6 +360,7 @@ async function clearAllCache() {
   setBusy(true);
   clearAllButton.disabled = true;
   try {
+    await stopBatchScan(false);
     await chrome.storage.local.clear();
     render([], null);
     renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
@@ -427,7 +430,7 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ['content.js'],
+    files: ['batch-queue.js', 'content.js'],
   });
   await sleep(150);
 }
@@ -509,6 +512,26 @@ async function startBatch(continueBatch) {
   }
 }
 
+async function stopBatchScan(showStatus) {
+  stopBatchButton.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'STOP_BATCH_SCAN',
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || 'Không thể dừng job nền.');
+    }
+    await loadBatchState();
+    if (showStatus) setStatus('Đã dừng và xóa job nền.');
+  } catch (error) {
+    if (showStatus) {
+      setStatus(error.message || 'Không thể dừng job nền.', true);
+    }
+  } finally {
+    stopBatchButton.disabled = false;
+  }
+}
+
 async function loadBatchState() {
   const response = await chrome.runtime.sendMessage({
     type: 'GET_BATCH_STATE',
@@ -528,7 +551,11 @@ async function loadBatchState() {
       ? `${state.current}/${state.batchTotal}`
       : state.status === 'AWAITING_CONTINUE'
         ? 'Chờ tiếp tục'
-        : 'Hoàn tất';
+        : state.status === 'CANCELLED'
+          ? 'Đã dừng'
+          : state.status === 'ERROR'
+            ? 'Lỗi'
+            : 'Hoàn tất';
   message.textContent = state.message || '';
   progress.style.width = `${
     state.batchTotal
@@ -539,6 +566,7 @@ async function loadBatchState() {
   const running = state.status === 'RUNNING';
   batchButton.disabled = running;
   continueBatchButton.disabled = running;
+  stopBatchButton.classList.toggle('hidden', !running);
   continueBatchButton.classList.toggle(
     'hidden',
     state.status !== 'AWAITING_CONTINUE',

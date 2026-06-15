@@ -1,3 +1,7 @@
+(function initializeDaoEduLeadScannerContent() {
+if (globalThis.__daoEduLeadScannerContentVersion === 32) return;
+globalThis.__daoEduLeadScannerContentVersion = 32;
+
 const EXPAND_TEXT_PATTERNS = [
   /^xem thêm bình luận$/i,
   /^xem \d+ bình luận$/i,
@@ -15,12 +19,17 @@ const EXPAND_TEXT_PATTERNS = [
 const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
+const BATCH_ATTEMPTED_URLS_KEY =
+  'daoEduLeadScannerBatchAttemptedPostUrls';
 const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
+const CONTENT_SCRIPT_VERSION = 32;
 let groupBatchRunning = false;
+let activeGroupBatchJobId = '';
+let groupBatchCancelRequested = false;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'PING_SCANNER') {
-    sendResponse({ ok: true });
+    sendResponse({ ok: true, version: CONTENT_SCRIPT_VERSION });
     return;
   }
 
@@ -81,17 +90,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     groupBatchRunning = true;
+    activeGroupBatchJobId = String(message.jobId || '');
+    groupBatchCancelRequested = false;
     sendResponse({ ok: true });
-    runGroupBatch(Number(message.limit) || 10)
-      .catch((error) =>
-        updateContentBatchState({
+    runGroupBatch(Number(message.limit) || 10, activeGroupBatchJobId)
+      .catch(async (error) => {
+        if (await isGroupBatchCancelled(activeGroupBatchJobId)) return;
+        await updateContentBatchState({
           status: 'ERROR',
           message: error.message || String(error),
-        }),
-      )
+        });
+      })
       .finally(() => {
         groupBatchRunning = false;
+        activeGroupBatchJobId = '';
+        groupBatchCancelRequested = false;
       });
+    return;
+  }
+
+  if (message?.type === 'CANCEL_GROUP_BATCH') {
+    if (!message.jobId || message.jobId === activeGroupBatchJobId) {
+      groupBatchCancelRequested = true;
+    }
+    sendResponse({ ok: true });
     return;
   }
 
@@ -105,232 +127,164 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-async function runGroupBatch(limit) {
-  const attemptedUrls = new Set();
-  let completed = 0;
+async function runGroupBatch(limit, jobId) {
+  const batchLimit = Math.max(1, Math.floor(Number(limit) || 10));
+  const scannedUrls = await getScannedUrlSet();
+  const attemptedUrls = await getBatchAttemptedUrlSet();
+  const queue = globalThis.DaoEduBatchQueue.create(batchLimit, [
+    ...scannedUrls,
+    ...attemptedUrls,
+  ]);
+  let successful = 0;
   let failed = 0;
   let emptyScrollRounds = 0;
-  let previousPageHeight = document.documentElement.scrollHeight;
+  applyScannedMarkers(scannedUrls);
 
-  while (completed < limit && emptyScrollRounds < 8) {
-    const scannedUrls = await getScannedUrlSet();
-    applyScannedMarkers(scannedUrls);
+  while (!queue.isFull() && emptyScrollRounds < 8) {
+    if (await isGroupBatchCancelled(jobId)) return;
+    const previousSize = queue.size;
+    queue.append(collectVisibleBatchPostUrls());
+    emptyScrollRounds =
+      queue.size === previousSize ? emptyScrollRounds + 1 : 0;
 
-    const candidate = findNextUnscannedPost(scannedUrls, attemptedUrls);
-    if (!candidate) {
-      await updateContentBatchState({
-        current: completed,
-        message: `Dang cuon tim bai chua quet (${completed}/${limit})...`,
-      });
-      window.scrollBy({
-        top: Math.max(window.innerHeight * 0.85, 650),
-        behavior: 'smooth',
-      });
-      await sleep(1800);
-
-      const pageHeight = document.documentElement.scrollHeight;
-      emptyScrollRounds =
-        pageHeight <= previousPageHeight ? emptyScrollRounds + 1 : 0;
-      previousPageHeight = Math.max(previousPageHeight, pageHeight);
-      continue;
-    }
-
-    emptyScrollRounds = 0;
-    attemptedUrls.add(candidate.url);
-    candidate.article.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    await sleep(700);
+    if (queue.isFull()) break;
 
     await updateContentBatchState({
-      current: completed + 1,
-      message: `Dang mo va quet sau bai ${completed + 1}/${limit}...`,
-      activePostUrl: candidate.url,
+      current: 0,
+      message: `Dang xep hang bai viet (${queue.size}/${batchLimit})...`,
     });
 
-    let opened = null;
+    window.scrollBy({
+      top: Math.max(window.innerHeight * 0.9, 700),
+      behavior: 'smooth',
+    });
+    await sleep(1800);
+  }
+
+  const targets = queue.values();
+  for (let index = 0; index < targets.length; index += 1) {
+    if (await isGroupBatchCancelled(jobId)) return;
+    const postUrl = targets[index];
+    const current = index + 1;
+    await updateContentBatchState({
+      current,
+      message: `Dang quet bai ${current}/${targets.length}...`,
+      activePostUrl: postUrl,
+    });
+
     try {
-      opened = await openBatchPost(candidate);
-      const result = await deepScanCurrentPost(20, 40);
+      const result = await chrome.runtime.sendMessage({
+        type: 'SCAN_POST_IN_BACKGROUND_TAB',
+        postUrl,
+        jobId,
+      });
+      if (await isGroupBatchCancelled(jobId)) return;
       if (!result?.ok) {
         throw new Error(result?.error || 'Khong doc duoc bai viet.');
       }
 
-      await saveScanResultLocally(result);
-      await markPostScannedLocally(result.summary.postUrl || candidate.url);
-      markArticleScanned(candidate.article);
-      completed += 1;
+      await markBatchAttemptedLocally(postUrl);
+      successful += 1;
 
       await updateContentBatchState({
-        current: completed,
+        current,
         processedTotal: await incrementContentBatchCounter('processedTotal'),
         lastResult: {
-          postUrl: result.summary.postUrl || candidate.url,
+          postUrl: result.summary.postUrl || postUrl,
           posts: result.summary.posts,
           comments: result.summary.comments,
           clickedExpanders: result.summary.clickedExpanders,
         },
-        message: `Da quet bai ${completed}/${limit}: ${result.summary.comments} binh luan.`,
+        message: `Da quet bai ${current}/${targets.length}: ${result.summary.comments} binh luan.`,
       });
 
-      await closeBatchPost(opened);
       applyScannedMarkers(await getScannedUrlSet());
-      await sleep(900);
     } catch (error) {
+      if (await isGroupBatchCancelled(jobId)) return;
+      await markBatchAttemptedLocally(postUrl);
       failed += 1;
       await updateContentBatchState({
+        current,
         failedTotal: await incrementContentBatchCounter('failedTotal'),
         lastResult: {
-          postUrl: candidate.url,
+          postUrl,
           error: error.message || String(error),
         },
-        message: `Bo qua mot bai loi: ${error.message || String(error)}`,
+        message: `Bai ${current}/${targets.length} bi loi: ${error.message || String(error)}`,
       });
-      await closeBatchPost(opened).catch(() => {});
-      await sleep(700);
     }
   }
 
-  const reachedLimit = completed >= limit;
+  if (await isGroupBatchCancelled(jobId)) return;
+  const reachedLimit = targets.length >= batchLimit;
+  const diagnostics = getBatchDiscoveryDiagnostics();
   await updateContentBatchState({
     status: reachedLimit ? 'AWAITING_CONTINUE' : 'DONE',
-    current: completed,
+    current: targets.length,
     activePostUrl: null,
     message: reachedLimit
-      ? `Da quet du ${limit} bai. Ban co muon quet tiep 10 bai khong?`
-      : `Da quet ${completed} bai, loi ${failed}. Khong tim thay bai moi sau khi cuon.`,
+      ? `Da xu ly ${targets.length} bai: ${successful} thanh cong, ${failed} loi.`
+      : targets.length
+        ? `Chi tim thay ${targets.length} bai moi: ${successful} thanh cong, ${failed} loi.`
+        : `Khong tim thay permalink bai viet (${diagnostics.extractedPostLinks} link bai/${diagnostics.anchorCount} link tren trang).`,
   });
 }
 
-function findNextUnscannedPost(scannedUrls, attemptedUrls) {
-  const candidates = [...document.querySelectorAll('a[href]')]
-    .map((link) => {
-      const url = normalizePostUrl(link.href);
-      const article = findPostArticleForLink(link, url);
-      return { link, url, article };
-    })
-    .filter(
-      ({ link, url, article }) =>
-        article &&
-        !link.closest('[role="dialog"]') &&
-        isPostUrl(url) &&
-        isDirectPostLink(link.href, url) &&
-        !scannedUrls.has(url) &&
-        !attemptedUrls.has(url),
-    )
-    .sort(
-      (a, b) =>
-        a.article.getBoundingClientRect().top -
-        b.article.getBoundingClientRect().top,
-    );
-
-  const directCandidate = [
-    ...new Map(
-      candidates.map((candidate) => [candidate.url, candidate]),
-    ).values(),
-  ][0];
-  if (directCandidate) return directCandidate;
-
-  for (const article of getFeedPostArticles()) {
-    if (article.dataset.daoEduScanned === 'true') continue;
-    if (!article.dataset.daoEduFeedKey) {
-      article.dataset.daoEduFeedKey = `feed-${hash(
-        cleanText(article.innerText).slice(0, 500),
-      )}`;
-    }
-
-    const directUrl =
-      [...article.querySelectorAll('a[href]')]
-        .map(getPostUrlFromLink)
-        .find(Boolean) || '';
-    const candidateKey = directUrl || article.dataset.daoEduFeedKey;
-    if (
-      attemptedUrls.has(candidateKey) ||
-      (directUrl && scannedUrls.has(directUrl))
-    ) {
-      continue;
-    }
-
-    const link = findFeedPostOpener(article, directUrl);
-    if (link) {
-      return { link, url: candidateKey, article };
-    }
-  }
-  return null;
-}
-
-async function openBatchPost(candidate) {
-  const initialUrl = location.href;
-  const existingDialogs = new Set(
-    [...document.querySelectorAll('[role="dialog"]')].filter(isVisible),
-  );
-
-  candidate.link.click();
-  const openedTarget = await waitForValue(() => {
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(
-      isVisible,
-    );
-    const newDialog = dialogs.find((item) => !existingDialogs.has(item));
-    if (newDialog) return { dialog: newDialog };
-    if (
-      isPostUrl(candidate.url) &&
-      normalizePostUrl(location.href) === candidate.url
-    ) {
-      return { dialog: null };
-    }
-    return null;
-  }, 12000);
-
-  if (!openedTarget) {
-    throw new Error('Facebook did not open the selected post.');
-  }
-
-  await sleep(1000);
-  return { initialUrl, dialog: openedTarget.dialog };
-}
-
-async function closeBatchPost(opened) {
-  const dialogs = [...document.querySelectorAll('[role="dialog"]')]
-    .filter(isVisible)
-    .sort(
-      (a, b) =>
-        b.getBoundingClientRect().width * b.getBoundingClientRect().height -
-        a.getBoundingClientRect().width * a.getBoundingClientRect().height,
-    );
-  const dialog = dialogs[0] || opened?.dialog;
-
-  if (dialog instanceof Element) {
-    const closeButton = [...dialog.querySelectorAll('[aria-label], button')]
-      .filter(isVisible)
-      .find((node) => {
-        const label = normalizeUiText(
-          cleanText(
-            node.getAttribute('aria-label') ||
-              node.getAttribute('title') ||
-              node.innerText,
-          ),
-        );
-        return /^(dong|close)$/.test(label);
-      });
-    if (closeButton) closeButton.click();
-    else {
-      document.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Escape',
-          code: 'Escape',
-          bubbles: true,
-        }),
-      );
-    }
-    await sleep(900);
-  }
-
+async function isGroupBatchCancelled(jobId) {
   if (
-    opened?.initialUrl &&
-    location.href !== opened.initialUrl &&
-    isPostUrl(location.href)
+    !jobId ||
+    groupBatchCancelRequested ||
+    activeGroupBatchJobId !== jobId
   ) {
-    history.back();
-    await sleep(1200);
+    return true;
   }
+  const state = await getContentBatchState();
+  return (
+    state.jobId !== jobId ||
+    state.status !== 'RUNNING' ||
+    state.cancelRequested === true
+  );
+}
+
+function collectVisibleBatchPostUrls() {
+  const linkCandidates = [...document.querySelectorAll('a[href]')]
+    .filter((link) => !link.closest('[role="dialog"]'))
+    .map((link) => ({
+      link,
+      url: getPostUrlFromLink(link),
+    }))
+    .filter(({ url }) => url && isUrlFromCurrentGroup(url));
+  const directUrls = linkCandidates
+    .filter(({ link, url }) => isDirectPostLink(link.href, url))
+    .map(({ url }) => url);
+  const fallbackUrls = linkCandidates.map(({ url }) => url);
+
+  const articleUrls = getFeedPostArticles()
+    .map(getFeedArticlePostUrl)
+    .filter(Boolean);
+  return [...new Set([...directUrls, ...articleUrls, ...fallbackUrls])];
+}
+
+function getBatchDiscoveryDiagnostics() {
+  const anchors = [...document.querySelectorAll('a[href]')];
+  const extractedPostLinks = anchors.filter((link) => {
+    const url = getPostUrlFromLink(link);
+    return (
+      !link.closest('[role="dialog"]') &&
+      url &&
+      isUrlFromCurrentGroup(url)
+    );
+  });
+  const directPostLinks = extractedPostLinks.filter(({ href }) => {
+    const url = extractGroupPostUrl(href);
+    return url && isDirectPostLink(href, url);
+  }).length;
+  return {
+    anchorCount: anchors.length,
+    directPostLinks,
+    extractedPostLinks: extractedPostLinks.length,
+    feedArticleCount: getFeedPostArticles().length,
+  };
 }
 
 async function incrementContentBatchCounter(key) {
@@ -351,16 +305,6 @@ async function updateContentBatchState(patch) {
       updatedAt: new Date().toISOString(),
     },
   });
-}
-
-async function waitForValue(factory, timeoutMilliseconds) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMilliseconds) {
-    const value = factory();
-    if (value) return value;
-    await sleep(250);
-  }
-  return null;
 }
 
 async function openScanAndCloseFeedPost(
@@ -644,6 +588,23 @@ async function getScannedUrlSet() {
   return new Set(
     (data[SCANNED_URLS_KEY] || []).map((url) => normalizePostUrl(url)),
   );
+}
+
+async function getBatchAttemptedUrlSet() {
+  const data = await chrome.storage.local.get(BATCH_ATTEMPTED_URLS_KEY);
+  return new Set(
+    (data[BATCH_ATTEMPTED_URLS_KEY] || []).map((url) =>
+      normalizePostUrl(url),
+    ),
+  );
+}
+
+async function markBatchAttemptedLocally(postUrl) {
+  const urls = await getBatchAttemptedUrlSet();
+  urls.add(normalizePostUrl(postUrl));
+  await chrome.storage.local.set({
+    [BATCH_ATTEMPTED_URLS_KEY]: [...urls],
+  });
 }
 
 function isPostUrl(value) {
@@ -955,6 +916,40 @@ function getFeedPostArticles() {
       (a, b) =>
         a.getBoundingClientRect().top - b.getBoundingClientRect().top,
     );
+}
+
+function getFeedArticlePostUrl(article) {
+  const candidates = [...article.querySelectorAll('a[href]')]
+    .map((link) => {
+      const url = getPostUrlFromLink(link);
+      return {
+        url,
+        score:
+          scoreFeedPostOpener(link, article) +
+          (url && isDirectPostLink(link.href, url) ? 200 : 0),
+      };
+    })
+    .filter((candidate) => candidate.url)
+    .sort((a, b) => b.score - a.score);
+  return candidates[0]?.url || '';
+}
+
+function isUrlFromCurrentGroup(value) {
+  try {
+    const currentGroup = location.pathname.match(/^\/groups\/([^/]+)/)?.[1];
+    const targetGroup = new URL(value, location.origin).pathname.match(
+      /^\/groups\/([^/]+)/,
+    )?.[1];
+    if (!currentGroup || !targetGroup) return true;
+    if (currentGroup === targetGroup) return true;
+
+    // Facebook can expose the same group as a slug in the address bar and a
+    // numeric ID in post permalinks. Keep numeric targets because shared-post
+    // links are uncommon and missing the real feed is worse than one extra URL.
+    return /^\d+$/.test(targetGroup);
+  } catch {
+    return false;
+  }
 }
 
 function markArticleScanned(article) {
@@ -2070,3 +2065,5 @@ function hash(value) {
   }
   return `fnv1a-${(result >>> 0).toString(16)}`;
 }
+
+})();
