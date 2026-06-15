@@ -2,11 +2,14 @@ const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
+const MIN_PARSER_VERSION = 8;
 
 const scanButton = document.getElementById('scan');
 const expandButton = document.getElementById('expand');
+const exportRawButton = document.getElementById('exportRaw');
 const exportButton = document.getElementById('export');
 const clearButton = document.getElementById('clear');
+const clearAllButton = document.getElementById('clearAll');
 const batchButton = document.getElementById('batch');
 const continueBatchButton = document.getElementById('continueBatch');
 const statusNode = document.getElementById('status');
@@ -14,8 +17,10 @@ const previewNode = document.getElementById('preview');
 
 scanButton.addEventListener('click', () => runScan(false));
 expandButton.addEventListener('click', () => runScan(true));
+exportRawButton.addEventListener('click', exportRawJson);
 exportButton.addEventListener('click', exportJson);
 clearButton.addEventListener('click', clearStorage);
+clearAllButton.addEventListener('click', clearAllCache);
 batchButton.addEventListener('click', () => startBatch(false));
 continueBatchButton.addEventListener('click', () => startBatch(true));
 
@@ -94,14 +99,29 @@ async function runScan(expandComments) {
 
 async function loadStoredData() {
   const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
-  const items = data[STORAGE_KEY] || [];
+  const storedItems = data[STORAGE_KEY] || [];
+  const items = filterValidItems(storedItems);
+  if (items.length !== storedItems.length) {
+    await chrome.storage.local.set({ [STORAGE_KEY]: items });
+    await chrome.storage.local.remove([
+      META_KEY,
+      LEAD_ANALYSIS_KEY,
+      SCANNED_URLS_KEY,
+    ]);
+  }
   render(items, data[META_KEY] || null);
   await analyzeAndRenderLeads(items);
 }
 
 async function getStoredItems() {
   const data = await chrome.storage.local.get(STORAGE_KEY);
-  return data[STORAGE_KEY] || [];
+  return filterValidItems(data[STORAGE_KEY] || []);
+}
+
+function filterValidItems(items) {
+  return items.filter(
+    (item) => Number(item.parserVersion || 0) >= MIN_PARSER_VERSION,
+  );
 }
 
 async function markPostScanned(postUrl) {
@@ -213,7 +233,7 @@ async function exportJson() {
     META_KEY,
     LEAD_ANALYSIS_KEY,
   ]);
-  const items = data[STORAGE_KEY] || [];
+  const items = filterValidItems(data[STORAGE_KEY] || []);
   const leadAnalysis =
     data[LEAD_ANALYSIS_KEY] || window.DaoEduLeadFilter.analyze(items);
   const payload = JSON.stringify(
@@ -229,14 +249,91 @@ async function exportJson() {
     null,
     2,
   );
+  await downloadJson(
+    payload,
+    `dao-edu-facebook-scan-analyzed-${Date.now()}.json`,
+  );
+}
+
+async function exportRawJson() {
+  const items = await getStoredItems();
+  const payload = JSON.stringify(buildRawPostTree(items), null, 2);
+  await downloadJson(payload, `dao-edu-facebook-scan-raw-${Date.now()}.json`);
+}
+
+function buildRawPostTree(items) {
+  const groups = new Map();
+
+  for (const item of items) {
+    const key = item.postId || item.pageUrl || item.sourceUrl;
+    if (!key) continue;
+    const group = groups.get(key) || { post: null, comments: [] };
+    if (item.kind === 'POST') group.post = item;
+    else if (item.kind === 'COMMENT') group.comments.push(item);
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .map(({ post, comments }) => {
+      const commentNodes = new Map(
+        comments.map((comment) => [
+          comment.fingerprint,
+          { ...comment, replies: [] },
+        ]),
+      );
+      const commentIds = new Map(
+        [...commentNodes.values()]
+          .filter((comment) => comment.commentId)
+          .map((comment) => [comment.commentId, comment]),
+      );
+      const roots = [];
+
+      for (const comment of commentNodes.values()) {
+        const parent =
+          commentIds.get(comment.parentCommentId) ||
+          commentNodes.get(comment.parentFingerprint);
+        if (parent && parent !== comment) parent.replies.push(comment);
+        else roots.push(comment);
+      }
+
+      sortCommentTree(roots);
+      return {
+        ...(post || createMissingPost(comments[0])),
+        comments: roots,
+      };
+    })
+    .sort((a, b) =>
+      String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')),
+    );
+}
+
+function createMissingPost(comment) {
+  return {
+    kind: 'POST',
+    postId: comment?.postId || '',
+    groupUrl: comment?.groupUrl || '',
+    pageUrl: comment?.pageUrl || '',
+    sourceUrl: comment?.pageUrl || '',
+    authorName: '',
+    authorUrl: '',
+    text: '',
+    capturedAt: comment?.capturedAt || '',
+    missingPostContent: true,
+  };
+}
+
+function sortCommentTree(comments) {
+  comments.sort((a, b) =>
+    String(a.capturedAt || '').localeCompare(String(b.capturedAt || '')),
+  );
+  for (const comment of comments) sortCommentTree(comment.replies);
+}
+
+async function downloadJson(payload, filename) {
   const url = URL.createObjectURL(
     new Blob([payload], { type: 'application/json' }),
   );
-  await chrome.downloads.download({
-    url,
-    filename: `dao-edu-facebook-scan-${Date.now()}.json`,
-    saveAs: true,
-  });
+  await chrome.downloads.download({ url, filename, saveAs: true });
   window.setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
@@ -251,11 +348,39 @@ async function clearStorage() {
   setStatus('Đã xóa dữ liệu lưu tạm.');
 }
 
+async function clearAllCache() {
+  const confirmed = window.confirm(
+    'Xóa toàn bộ dữ liệu, lịch sử bài đã quét và trạng thái quét?',
+  );
+  if (!confirmed) return;
+
+  setBusy(true);
+  clearAllButton.disabled = true;
+  try {
+    await chrome.storage.local.clear();
+    render([], null);
+    renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
+
+    const panel = document.getElementById('batchPanel');
+    const progress = document.getElementById('batchProgress');
+    panel.classList.add('hidden');
+    progress.style.width = '0%';
+    continueBatchButton.classList.add('hidden');
+    setStatus('Đã xóa toàn bộ cache. Có thể quét lại từ đầu.');
+  } finally {
+    setBusy(false);
+    clearAllButton.disabled = false;
+  }
+}
+
 function setBusy(busy) {
   scanButton.disabled = busy;
   expandButton.disabled = busy;
+  exportRawButton.disabled = busy;
+  exportButton.disabled = busy;
   batchButton.disabled = busy;
   continueBatchButton.disabled = busy;
+  clearAllButton.disabled = busy;
 }
 
 function setStatus(message, isError = false) {

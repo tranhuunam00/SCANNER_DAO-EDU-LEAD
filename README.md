@@ -39,3 +39,13 @@ Extension lưu:
 - Fingerprint chống trùng.
 
 Không lưu cookie, mật khẩu hoặc token Facebook.
+
+## Xuất JSON
+
+- **Xuất JSON thô**: chỉ xuất một mảng bài viết. Mỗi bài có `comments`, mỗi
+  bình luận có `replies` lồng nhau theo đúng cấp phản hồi.
+- **Xuất JSON có thuật toán**: xuất dữ liệu phẳng kèm kết quả chấm điểm và
+  phân loại lead của thuật toán local.
+
+Nếu nội dung bài chỉ nằm trong ảnh và Facebook không cung cấp caption dạng chữ,
+post vẫn được xuất đúng URL/ID với `missingPostContent: true` và `text` rỗng.

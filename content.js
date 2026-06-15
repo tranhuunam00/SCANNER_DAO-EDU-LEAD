@@ -17,6 +17,7 @@ const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
 let groupBatchRunning = false;
+let activePostSnapshot = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'PING_SCANNER') {
@@ -120,6 +121,10 @@ async function runGroupBatch(limit) {
     });
 
     try {
+      activePostSnapshot = createPostSnapshot(
+        candidate.article,
+        candidate.url,
+      );
       const opened = await openPost(candidate);
       const result = await deepScanCurrentPost(20, 40);
       if (!result?.ok) {
@@ -143,6 +148,7 @@ async function runGroupBatch(limit) {
       });
 
       await closeOpenedPost(opened);
+      activePostSnapshot = null;
       applyScannedMarkers(await getScannedUrlSet());
       await sleep(900);
     } catch (error) {
@@ -156,6 +162,7 @@ async function runGroupBatch(limit) {
         message: `Bo qua mot bai loi: ${error.message || String(error)}`,
       });
       await closeOpenedPost({ initialUrl: location.href }).catch(() => {});
+      activePostSnapshot = null;
       await sleep(700);
     }
   }
@@ -175,7 +182,7 @@ function findNextUnscannedPost(scannedUrls, attemptedUrls) {
   const candidates = [...document.querySelectorAll('a[href]')]
     .map((link) => {
       const url = normalizePostUrl(link.href);
-      const article = link.closest('[role="article"]');
+      const article = findPostArticleForLink(link, url);
       return { link, url, article };
     })
     .filter(
@@ -183,6 +190,7 @@ function findNextUnscannedPost(scannedUrls, attemptedUrls) {
         article &&
         !link.closest('[role="dialog"]') &&
         isPostUrl(url) &&
+        isDirectPostLink(link.href, url) &&
         !scannedUrls.has(url) &&
         !attemptedUrls.has(url),
     )
@@ -192,7 +200,27 @@ function findNextUnscannedPost(scannedUrls, attemptedUrls) {
         b.article.getBoundingClientRect().top,
     );
 
-  return candidates[0] || null;
+  return (
+    [...new Map(candidates.map((candidate) => [candidate.url, candidate])).values()][0] ||
+    null
+  );
+}
+
+function findPostArticleForLink(node, normalizedPostUrl) {
+  let current = node instanceof Element ? node : null;
+
+  while (current && current !== document.body) {
+    if (current.matches?.('[role="article"]')) {
+      const ownScope = cloneWithoutNestedArticles(current);
+      const hasDirectPostLink = [...ownScope.querySelectorAll('a[href]')].some(
+        (link) => isDirectPostLink(link.href, normalizedPostUrl),
+      );
+      if (hasDirectPostLink && !findCommentPermalink(ownScope)) return current;
+    }
+    current = current.parentElement;
+  }
+
+  return null;
 }
 
 async function openPost(candidate) {
@@ -271,8 +299,13 @@ async function closeOpenedPost(opened) {
 async function saveScanResultLocally(result) {
   const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
   const existing = data[STORAGE_KEY] || [];
+  const currentPostId = result.summary.postId;
   const retained = existing.filter(
-    (item) => item.pageUrl !== result.summary.postUrl,
+    (item) =>
+      Number(item.parserVersion || 0) >= 8 &&
+      isPostUrl(item.pageUrl) &&
+      item.pageUrl !== result.summary.postUrl &&
+      item.postId !== currentPostId,
   );
   const map = new Map(retained.map((item) => [item.fingerprint, item]));
 
@@ -289,6 +322,7 @@ async function saveScanResultLocally(result) {
     [META_KEY]: {
       scannedAt: new Date().toISOString(),
       postUrl: result.summary.postUrl,
+      postId: result.summary.postId,
       lastPostCount: result.summary.posts,
       lastCommentCount: result.summary.comments,
       clickedExpanders: result.summary.clickedExpanders,
@@ -435,9 +469,17 @@ async function waitForPostContent(timeoutMilliseconds) {
 function scanCurrentPost() {
   try {
     const root = getPostRoot();
-    const postUrl = getCanonicalPostUrl();
-    const post = parseOriginalPost(root, postUrl);
+    const postUrl =
+      activePostSnapshot?.postUrl || getCanonicalPostUrl();
+    const expectedPostId = extractPostId(postUrl);
+    const post = parseOriginalPost(root, postUrl, activePostSnapshot);
     const comments = parseAllComments(root, post, postUrl);
+    const foreignComments = comments.filter(
+      (comment) => comment.postId !== expectedPostId,
+    );
+    if (foreignComments.length) {
+      throw new Error('Detected comments from another Facebook post.');
+    }
     const items = uniqueByFingerprint([post, ...comments].filter(Boolean));
 
     return {
@@ -450,6 +492,7 @@ function scanCurrentPost() {
         topLevelArticles: 0,
         groupUrl: getGroupUrl(),
         postUrl,
+        postId: expectedPostId,
         postDetected: Boolean(post),
       },
     };
@@ -524,7 +567,23 @@ function applyScannedMarkers(scanned) {
   }
 }
 
-function parseOriginalPost(root, postUrl) {
+function parseOriginalPost(root, postUrl, snapshot = null) {
+  if (snapshot?.text) {
+    return createItem({
+      kind: 'POST',
+      author: snapshot.author,
+      text: snapshot.text,
+      sourceUrl: postUrl,
+      parentFingerprint: null,
+      postId: extractPostId(postUrl),
+      commentId: null,
+      parentCommentId: null,
+      depth: 0,
+      treePath: '',
+      contextTexts: [snapshot.text],
+    });
+  }
+
   const messageNodes = [
     ...root.querySelectorAll('[data-ad-preview="message"]'),
     ...root.querySelectorAll('[data-ad-comet-preview="message"]'),
@@ -538,21 +597,31 @@ function parseOriginalPost(root, postUrl) {
         findCommentPermalink(node.closest('[role="article"]')),
       ),
     }))
-    .filter(({ text }) => isUsefulContent(text))
-    .sort(
-      (a, b) =>
-        Number(a.isInsideComment) - Number(b.isInsideComment) ||
-        b.text.length - a.text.length,
-    )[0];
+    .filter(
+      ({ text, isInsideComment }) =>
+        !isInsideComment && isUsefulContent(text),
+    )
+    .sort((a, b) => b.text.length - a.text.length)[0];
 
-  if (!messageNode) return null;
+  const fallbackArticle = findOriginalPostArticle(root, postUrl);
+  const fallbackText = fallbackArticle
+    ? extractPostText(fallbackArticle)
+    : '';
+  if (!messageNode && !fallbackText) {
+    return isPostUrl(postUrl)
+      ? createMissingOriginalPost(postUrl, snapshot?.author)
+      : null;
+  }
 
-  const container = findPostContainer(messageNode.node, root);
+  const container = messageNode
+    ? findPostContainer(messageNode.node, root)
+    : fallbackArticle;
   const author = findAuthor(container, { preferHeader: true });
+  const text = messageNode?.text || fallbackText;
   return createItem({
     kind: 'POST',
     author,
-    text: messageNode.text,
+    text,
     sourceUrl: postUrl,
     parentFingerprint: null,
     postId: extractPostId(postUrl),
@@ -560,8 +629,108 @@ function parseOriginalPost(root, postUrl) {
     parentCommentId: null,
     depth: 0,
     treePath: '',
-    contextTexts: [messageNode.text],
+    contextTexts: [text],
   });
+}
+
+function createMissingOriginalPost(postUrl, author = null) {
+  return {
+    ...createItem({
+      kind: 'POST',
+      author: author || { name: '', url: '' },
+      text: '',
+      sourceUrl: postUrl,
+      parentFingerprint: null,
+      postId: extractPostId(postUrl),
+      commentId: null,
+      parentCommentId: null,
+      depth: 0,
+      treePath: '',
+      contextTexts: [],
+    }),
+    missingPostContent: true,
+  };
+}
+
+function createPostSnapshot(article, postUrl) {
+  const normalizedPostUrl = normalizePostUrl(postUrl);
+  const ownScope = cloneWithoutNestedArticles(article);
+  const containsDirectPostLink = [...ownScope.querySelectorAll('a[href]')].some(
+    (link) => isDirectPostLink(link.href, normalizedPostUrl),
+  );
+  if (!containsDirectPostLink || findCommentPermalink(ownScope)) return null;
+
+  const text = extractPostText(article);
+  return {
+    postUrl,
+    text,
+    author: findAuthor(ownScope, { preferHeader: true }),
+  };
+}
+
+function findOriginalPostArticle(root, postUrl) {
+  const normalizedPostUrl = normalizePostUrl(postUrl);
+  const articles = uniqueNodes(
+    [...root.querySelectorAll('a[href]')]
+      .filter((link) => isDirectPostLink(link.href, normalizedPostUrl))
+      .map((link) => findPostArticleForLink(link, normalizedPostUrl))
+      .filter((article) => article && isVisible(article)),
+  );
+
+  return (
+    articles
+      .map((article) => {
+        const links = [...article.querySelectorAll('a[href]')];
+        const hasPostLink = links.some(
+          (link) => isDirectPostLink(link.href, normalizedPostUrl),
+        );
+        const hasMessage = Boolean(
+          article.querySelector(
+            '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
+          ),
+        );
+        const top = article.getBoundingClientRect().top;
+        return {
+          article,
+          score:
+            (hasPostLink ? 30 : 0) +
+            (hasMessage ? 20 : 0) -
+            Math.max(top, 0) / 10000,
+        };
+      })
+      .sort((a, b) => b.score - a.score)[0]?.article || null
+  );
+}
+
+function extractPostText(container) {
+  if (!(container instanceof Element)) return '';
+  const ownScope = cloneWithoutNestedArticles(container);
+  if (findCommentPermalink(ownScope)) return '';
+
+  const preferred = [
+    ...container.querySelectorAll(
+      '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
+    ),
+  ]
+    .filter((node) => {
+      const nearestArticle = node.closest('[role="article"]');
+      return !nearestArticle || nearestArticle === container;
+    })
+    .map((node) => cleanText(node.innerText))
+    .filter(isUsefulContent);
+  if (preferred.length) {
+    return preferred.sort((a, b) => b.length - a.length)[0];
+  }
+
+  const author = findAuthor(ownScope, { preferHeader: true });
+  const candidates = [...ownScope.querySelectorAll('[dir="auto"]')]
+    .filter((node) => !node.closest('a, button, [role="button"]'))
+    .map((node) => cleanText(node.innerText))
+    .filter((text) => isUsefulContent(text))
+    .filter((text) => text !== author.name)
+    .filter((text) => !isMetadataText(text));
+
+  return candidates.sort((a, b) => b.length - a.length)[0] || '';
 }
 
 function findPostContainer(messageNode, root) {
@@ -579,32 +748,127 @@ function findPostContainer(messageNode, root) {
 }
 
 function parseAllComments(root, post, postUrl) {
+  const postId = extractPostId(postUrl);
   const articleNodes = [...root.querySelectorAll('[role="article"]')].filter(
     (node) =>
       isVisible(node) &&
       cleanText(node.innerText).length >= 2 &&
-      !isOriginalPostArticle(node),
+      !isOriginalPostArticle(node) &&
+      articleBelongsToPost(node, postId),
   );
-  const postId = extractPostId(postUrl);
   const postText = post?.text || '';
   const parsedByArticle = new Map();
+  const visualStack = [];
 
   for (const article of articleNodes) {
     const parentArticle = findParentCommentArticle(article, root);
-    const parentItem = parentArticle
+    const nestedParentItem = parentArticle
       ? parsedByArticle.get(parentArticle) || null
       : null;
+    const visualLeft = getCommentVisualLeft(article);
+    while (
+      visualStack.length &&
+      visualStack[visualStack.length - 1].left >= visualLeft - 8
+    ) {
+      visualStack.pop();
+    }
+    const visualParentItem =
+      visualStack[visualStack.length - 1]?.item || null;
     const item = parseCommentArticle(article, {
       parentFingerprint: post?.fingerprint || null,
       postUrl,
       postId,
       postText,
-      parentItem,
+      parentItem: visualParentItem || nestedParentItem,
     });
-    if (item) parsedByArticle.set(article, item);
+    if (item) {
+      parsedByArticle.set(article, item);
+      visualStack.push({ left: visualLeft, item });
+    }
   }
 
-  return uniqueByFingerprint([...parsedByArticle.values()]);
+  return resolveCommentRelationships(
+    uniqueByFingerprint([...parsedByArticle.values()]),
+    post,
+  );
+}
+
+function getCommentVisualLeft(article) {
+  const profileLinks = [...article.querySelectorAll('a[href]')].filter(
+    (link) =>
+      link.closest('[role="article"]') === article &&
+      isVisible(link) &&
+      isProfileUrl(link.getAttribute('href') || ''),
+  );
+  const lefts = profileLinks
+    .map((link) => link.getBoundingClientRect().left)
+    .filter(Number.isFinite);
+  return lefts.length
+    ? Math.min(...lefts)
+    : article.getBoundingClientRect().left;
+}
+
+function resolveCommentRelationships(comments, post) {
+  const byCommentId = new Map(
+    comments
+      .filter((comment) => comment.commentId)
+      .map((comment) => [comment.commentId, comment]),
+  );
+  const resolved = new Set();
+  const resolving = new Set();
+
+  function resolve(comment) {
+    if (resolved.has(comment) || resolving.has(comment)) return;
+    resolving.add(comment);
+
+    const parent = byCommentId.get(comment.parentCommentId);
+    if (parent && parent !== comment) {
+      resolve(parent);
+      comment.parentFingerprint = parent.fingerprint;
+      comment.depth = parent.depth + 1;
+      comment.treePath = `${parent.treePath}|${comment.commentId}`;
+      comment.contextTexts = [...parent.contextTexts, comment.text];
+      comment.replyToAuthor = parent.authorName;
+    } else {
+      comment.parentCommentId = null;
+      comment.parentFingerprint = post?.fingerprint || null;
+      comment.depth = 1;
+      comment.treePath = comment.commentId;
+      comment.contextTexts = [
+        ...(post?.text ? [post.text] : []),
+        comment.text,
+      ];
+      comment.replyToAuthor = '';
+    }
+
+    resolving.delete(comment);
+    resolved.add(comment);
+  }
+
+  for (const comment of comments) resolve(comment);
+  return comments;
+}
+
+function articleBelongsToPost(article, expectedPostId) {
+  const ownScope = cloneWithoutNestedArticles(article);
+  const ownPermalink = findCommentPermalink(ownScope);
+  if (ownPermalink) {
+    return extractPostId(ownPermalink) === expectedPostId;
+  }
+
+  let current = article.parentElement;
+  while (current) {
+    if (current.matches?.('[role="article"]')) {
+      const parentScope = cloneWithoutNestedArticles(current);
+      const parentPermalink = findCommentPermalink(parentScope);
+      if (parentPermalink) {
+        return extractPostId(parentPermalink) === expectedPostId;
+      }
+    }
+    current = current.parentElement;
+  }
+
+  return false;
 }
 
 function isOriginalPostArticle(article) {
@@ -613,7 +877,30 @@ function isOriginalPostArticle(article) {
     ownScope.querySelector(
       '[data-ad-preview="message"], [data-ad-comet-preview="message"]',
     ),
+  ) || Boolean(
+    [...ownScope.querySelectorAll('a[href]')].some(
+      (link) =>
+        isDirectPostLink(
+          link.href,
+          normalizePostUrl(getCanonicalPostUrl()),
+        ),
+    ),
   );
+}
+
+function isDirectPostLink(value, normalizedPostUrl) {
+  try {
+    const url = new URL(value, location.origin);
+    if (
+      url.searchParams.has('comment_id') ||
+      url.searchParams.has('reply_comment_id')
+    ) {
+      return false;
+    }
+    return normalizePostUrl(url.toString()) === normalizedPostUrl;
+  } catch {
+    return false;
+  }
 }
 
 function parseCommentArticle(
@@ -630,10 +917,11 @@ function parseCommentArticle(
     findCommentPermalink(ownScope) ||
     findCommentPermalink(article.parentElement) ||
     postUrl;
+  const relation = extractCommentRelation(commentUrl);
   const commentId =
-    extractCommentId(commentUrl) ||
+    relation.commentId ||
     createLocalCommentId(postId, author, text);
-  const parentCommentId = parentItem?.commentId || null;
+  const parentCommentId = chooseDirectParentCommentId(relation, parentItem);
   const depth = parentItem ? parentItem.depth + 1 : 1;
   const treePath = parentItem?.treePath
     ? `${parentItem.treePath}|${commentId}`
@@ -657,6 +945,19 @@ function parseCommentArticle(
     contextTexts,
     replyToAuthor: parentItem?.authorName || '',
   });
+}
+
+function chooseDirectParentCommentId(relation, parentItem) {
+  const parentThreadRootId = parentItem?.treePath?.split('|')[0] || '';
+  const isParentInUrlThread =
+    parentItem &&
+    (!relation.parentCommentId ||
+      parentItem.commentId === relation.parentCommentId ||
+      parentThreadRootId === relation.parentCommentId);
+  return (
+    (isParentInUrlThread ? parentItem.commentId : relation.parentCommentId) ||
+    null
+  );
 }
 
 function createItem({
@@ -684,14 +985,16 @@ function createItem({
     ].join('|'),
   );
   return {
-    parserVersion: 5,
+    parserVersion: 8,
     kind,
     source: 'FACEBOOK_GROUP',
     groupUrl: getGroupUrl(),
-    pageUrl: getCanonicalPostUrl(),
+    pageUrl: activePostSnapshot?.postUrl || getCanonicalPostUrl(),
     sourceUrl: sourceUrlValue,
     parentFingerprint,
-    postId: postId || extractPostId(getCanonicalPostUrl()),
+    postId:
+      postId ||
+      extractPostId(activePostSnapshot?.postUrl || getCanonicalPostUrl()),
     commentId,
     parentCommentId,
     depth,
@@ -728,15 +1031,20 @@ function extractPostId(value) {
 }
 
 function extractCommentId(value) {
+  return extractCommentRelation(value).commentId;
+}
+
+function extractCommentRelation(value) {
   try {
     const url = new URL(value, location.origin);
-    return (
-      url.searchParams.get('reply_comment_id') ||
-      url.searchParams.get('comment_id') ||
-      ''
-    );
+    const parentCommentId = url.searchParams.get('comment_id') || '';
+    const replyCommentId = url.searchParams.get('reply_comment_id') || '';
+    return {
+      commentId: replyCommentId || parentCommentId,
+      parentCommentId: replyCommentId ? parentCommentId : '',
+    };
   } catch {
-    return '';
+    return { commentId: '', parentCommentId: '' };
   }
 }
 

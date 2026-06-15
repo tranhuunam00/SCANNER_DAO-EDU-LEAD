@@ -360,3 +360,9 @@ footer {
   gap: 8px;
   margin-top: 12px;
 }
+
+.clear-all {
+  grid-column: 1 / -1;
+  border-color: #fecaca;
+  background: #fff7f7;
+}
