@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "DAO EDU Lead Scanner",
+  "version": "0.8.0",
+  "description": "Quet bai viet va binh luan dang hien thi tren Facebook de thu nghiem lead tuyen sinh.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://web.facebook.com/*",
+    "https://m.facebook.com/*"
+  ],
+  "action": {
+    "default_title": "DAO EDU Lead Scanner",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://web.facebook.com/*",
+        "https://m.facebook.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

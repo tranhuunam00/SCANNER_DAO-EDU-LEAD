@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DAO EDU Lead Scanner</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="logo">D</div>
+        <div>
+          <h1>DAO EDU Scanner</h1>
+          <p>Thử nghiệm quét Facebook</p>
+        </div>
+      </header>
+
+      <section class="notice">
+        Chỉ quét nội dung đang hiển thị trong tab Facebook hiện tại.
+      </section>
+
+      <div class="actions">
+        <button id="scan" class="primary">Quét bài đang mở</button>
+        <button id="expand">Quét sâu toàn bộ bình luận</button>
+        <button id="batch" class="batch">Quét 10 bài trong nhóm</button>
+        <button id="continueBatch" class="batch hidden">Quét tiếp 10 bài</button>
+      </div>
+
+      <section id="batchPanel" class="batch-panel hidden">
+        <div class="batch-heading">
+          <strong>Quét hàng loạt</strong>
+          <span id="batchStatus"></span>
+        </div>
+        <div class="progress"><span id="batchProgress"></span></div>
+        <p id="batchMessage"></p>
+      </section>
+
+      <section class="stats">
+        <article>
+          <strong id="postCount">0</strong>
+          <span>Bài viết</span>
+        </article>
+        <article>
+          <strong id="commentCount">0</strong>
+          <span>Bình luận</span>
+        </article>
+        <article>
+          <strong id="savedCount">0</strong>
+          <span>Đã lưu</span>
+        </article>
+      </section>
+
+      <p id="status" class="status">Sẵn sàng.</p>
+
+      <section>
+        <div class="section-title">
+          <h2>Dữ liệu gần nhất</h2>
+          <span id="scanTime"></span>
+        </div>
+        <div id="preview" class="preview">
+          <div class="empty">Chưa có dữ liệu.</div>
+        </div>
+      </section>
+
+      <footer>
+        <button id="export">Xuất JSON</button>
+        <button id="clear" class="danger">Xóa dữ liệu</button>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
