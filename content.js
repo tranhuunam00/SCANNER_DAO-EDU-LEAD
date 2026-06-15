@@ -1,6 +1,6 @@
 (function initializeDaoEduLeadScannerContent() {
-if (globalThis.__daoEduLeadScannerContentVersion === 32) return;
-globalThis.__daoEduLeadScannerContentVersion = 32;
+if (globalThis.__daoEduLeadScannerContentVersion === 33) return;
+globalThis.__daoEduLeadScannerContentVersion = 33;
 
 const EXPAND_TEXT_PATTERNS = [
   /^xem thêm bình luận$/i,
@@ -22,7 +22,10 @@ const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const BATCH_ATTEMPTED_URLS_KEY =
   'daoEduLeadScannerBatchAttemptedPostUrls';
 const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-const CONTENT_SCRIPT_VERSION = 32;
+const CONTENT_SCRIPT_VERSION = 33;
+const DEEP_SCAN_STABLE_PASSES = 4;
+const MAX_STALLED_CLICKS_PER_EXPANDER = 4;
+const commentExpanderAttempts = new WeakMap();
 let groupBatchRunning = false;
 let activeGroupBatchJobId = '';
 let groupBatchCancelRequested = false;
@@ -617,7 +620,7 @@ function isPostUrl(value) {
   }
 }
 
-async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
+async function deepScanCurrentPost(_maxRounds, maxClicksPerRound) {
   await waitForPostContent(15000);
 
   const pinnedPostUrl = getPostUrlForRoot(getPostRoot());
@@ -629,8 +632,8 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
   }
 
   let clickedExpanders = 0;
-  let emptyRounds = 0;
-  let previousScrollHeight = 0;
+  let stablePasses = 0;
+  let rounds = 0;
   const collected = new Map();
   let latestSummary = null;
   let lastScanError = '';
@@ -642,18 +645,42 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
     };
   }
 
-  for (let round = 1; round <= maxRounds; round += 1) {
+  while (stablePasses < DEEP_SCAN_STABLE_PASSES) {
+    rounds += 1;
+    const beforeItemCount = collected.size;
+    const beforeState = getCommentLoadState();
     const result = await expandCommentRound(maxClicksPerRound);
     clickedExpanders += result.clickedExpanders;
 
-    const grew = result.scrollHeight > previousScrollHeight;
-    previousScrollHeight = Math.max(previousScrollHeight, result.scrollHeight);
-    emptyRounds =
-      result.clickedExpanders === 0 && !grew ? emptyRounds + 1 : 0;
-
-    if (emptyRounds >= 2) break;
-    await sleep(result.clickedExpanders > 0 ? 1600 : 900);
+    await waitForCommentDomToSettle(
+      result.clickedExpanders > 0 ? 1200 : 800,
+      result.clickedExpanders > 0 ? 12000 : 5000,
+    );
     collectScanSnapshot();
+
+    const afterState = getCommentLoadState();
+    const madeProgress =
+      collected.size > beforeItemCount ||
+      afterState.articleCount > beforeState.articleCount ||
+      afterState.scrollHeight > beforeState.scrollHeight + 2;
+
+    if (madeProgress) {
+      for (const node of result.clickedNodes) {
+        if (node.isConnected) commentExpanderAttempts.set(node, 0);
+      }
+    }
+
+    const pendingExpanders = findCommentExpanders().length;
+    const isStable =
+      !madeProgress &&
+      result.clickedExpanders === 0 &&
+      pendingExpanders === 0 &&
+      afterState.atBottom;
+    stablePasses = isStable ? stablePasses + 1 : 0;
+
+    if (stablePasses < DEEP_SCAN_STABLE_PASSES) {
+      await sleep(isStable ? 1400 : 500);
+    }
   }
 
   await sleep(700);
@@ -679,6 +706,7 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
       posts,
       comments: commentCount,
       clickedExpanders,
+      deepScanRounds: rounds,
     },
   };
 
@@ -705,34 +733,87 @@ async function deepScanCurrentPost(maxRounds, maxClicksPerRound) {
 async function expandCommentRound(maxClicks) {
   const candidates = findCommentExpanders().slice(0, maxClicks);
   let clickedExpanders = 0;
+  const clickedNodes = [];
 
   for (const node of candidates) {
     if (!(node instanceof Element) || !node.isConnected || !isVisible(node)) {
       continue;
     }
-    node.dataset.daoEduScannerClicked = 'true';
+    commentExpanderAttempts.set(
+      node,
+      Number(commentExpanderAttempts.get(node) || 0) + 1,
+    );
     node.click();
+    clickedNodes.push(node);
     clickedExpanders += 1;
-    await sleep(80);
+    await sleep(120);
   }
 
   const scrollContainer = findCommentsScrollContainer();
   if (scrollContainer) {
     scrollContainer.scrollTo({
       top: scrollContainer.scrollHeight,
-      behavior: 'smooth',
+      behavior: 'auto',
     });
   } else {
-    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
   }
 
   return {
     ok: true,
     clickedExpanders,
+    clickedNodes,
     scrollTop: scrollContainer?.scrollTop || window.scrollY || 0,
     scrollHeight:
       scrollContainer?.scrollHeight || document.documentElement.scrollHeight,
   };
+}
+
+function getCommentLoadState() {
+  const root = getPostRoot();
+  const scrollContainer = findCommentsScrollContainer();
+  const scrollTop = scrollContainer?.scrollTop || window.scrollY || 0;
+  const clientHeight =
+    scrollContainer?.clientHeight || window.innerHeight || 0;
+  const scrollHeight =
+    scrollContainer?.scrollHeight || document.documentElement.scrollHeight;
+  return {
+    articleCount: root.querySelectorAll('[role="article"]').length,
+    scrollHeight,
+    atBottom: scrollTop + clientHeight >= scrollHeight - 12,
+  };
+}
+
+async function waitForCommentDomToSettle(quietMilliseconds, timeoutMilliseconds) {
+  const root = getPostRoot();
+  const observedRoot = root instanceof Document ? root.documentElement : root;
+  if (!(observedRoot instanceof Element)) {
+    await sleep(quietMilliseconds);
+    return;
+  }
+
+  await new Promise((resolve) => {
+    let quietTimer = null;
+    let timeoutTimer = null;
+    const finish = () => {
+      observer.disconnect();
+      window.clearTimeout(quietTimer);
+      window.clearTimeout(timeoutTimer);
+      resolve();
+    };
+    const scheduleQuietFinish = () => {
+      window.clearTimeout(quietTimer);
+      quietTimer = window.setTimeout(finish, quietMilliseconds);
+    };
+    const observer = new MutationObserver(scheduleQuietFinish);
+    observer.observe(observedRoot, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    timeoutTimer = window.setTimeout(finish, timeoutMilliseconds);
+    scheduleQuietFinish();
+  });
 }
 
 async function waitForPostContent(timeoutMilliseconds) {
@@ -1891,10 +1972,15 @@ function findCommentExpanders() {
       );
       return (
         isVisible(node) &&
-        node.dataset.daoEduScannerClicked !== 'true' &&
+        Number(commentExpanderAttempts.get(node) || 0) <
+          MAX_STALLED_CLICKS_PER_EXPANDER &&
         isCommentExpanderText(text)
       );
     }),
+  ).sort(
+    (a, b) =>
+      Number(commentExpanderAttempts.get(a) || 0) -
+      Number(commentExpanderAttempts.get(b) || 0),
   );
 }
 

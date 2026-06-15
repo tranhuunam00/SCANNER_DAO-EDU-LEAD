@@ -12,9 +12,10 @@ thị trên Facebook, sau đó lưu tạm vào `chrome.storage.local`.
 5. Mở riêng một bài viết Facebook cần thử.
 6. Mở extension và chọn **Quét sâu toàn bộ bình luận**.
 
-Chế độ **Quét sâu toàn bộ bình luận** chạy tối đa 10 vòng. Mỗi vòng bấm tối đa
-30 nút mở comment/reply, cuộn vùng bình luận xuống cuối và chờ Facebook tải
-thêm. Quá trình dừng sớm sau hai vòng liên tiếp không còn dữ liệu mới.
+Chế độ **Quét sâu toàn bộ bình luận** không giới hạn số vòng. Mỗi vòng bấm các
+nút mở comment/reply, cuộn vùng bình luận xuống cuối và chờ DOM Facebook ổn
+định. Quá trình chỉ dừng sau nhiều lượt liên tiếp xác nhận không còn nút mở,
+không có bình luận mới và vùng bình luận đã ở cuối.
 
 ## Quét hàng loạt
 
