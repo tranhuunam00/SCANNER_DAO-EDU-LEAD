@@ -2087,15 +2087,17 @@ function isCommentExpanderText(text) {
 
   const normalized = normalizeUiText(text);
   return (
-    /^xem (them |tat ca )?\d* ?binh luan$/.test(normalized) ||
-    /^xem cac binh luan truoc$/.test(normalized) ||
-    /^xem (them |tat ca )?\d* ?phan hoi$/.test(normalized) ||
-    /^view (more|all \d+) comments$/.test(normalized) ||
-    /^view (more|\d+) replies$/.test(normalized)
+    /^xem (them |tat ca |cac )?\d* ?binh luan( truoc| khac)?$/.test(normalized) ||
+    /^xem (them |tat ca |cac )?\d* ?phan hoi( truoc| khac)?$/.test(normalized) ||
+    /^view (more|all \d+|previous) comments$/.test(normalized) ||
+    /^view (more|\d+|previous) replies$/.test(normalized)
   );
 }
 
 function findCommentsScrollContainer() {
+  const isStandalone = /\/groups\/[^/]+\/(posts|permalink)\//.test(location.pathname);
+  if (isStandalone) return null;
+
   const root = getPostRoot();
   let current = root instanceof Element ? root : document.documentElement;
 
@@ -2190,11 +2192,12 @@ function isVisible(node) {
   if (!(node instanceof Element)) return false;
   const rect = node.getBoundingClientRect();
   const style = window.getComputedStyle(node);
+  const hasDimensions = rect.width > 0 && rect.height > 0;
   return (
-    rect.width > 0 &&
-    rect.height > 0 &&
+    (hasDimensions || !document.hasFocus()) &&
     style.visibility !== 'hidden' &&
-    style.display !== 'none'
+    style.display !== 'none' &&
+    style.opacity !== '0'
   );
 }
 
