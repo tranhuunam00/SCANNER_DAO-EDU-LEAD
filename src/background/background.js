@@ -3,6 +3,7 @@ import {
   BATCH_SIZE,
   API_URL_KEY,
   TOKEN_KEY,
+  BATCH_ATTEMPTED_URLS_KEY,
 } from '../constants';
 const activeScanTabsByJob = new Map();
 
@@ -69,6 +70,10 @@ async function startBatch(sourceTabId, continueBatch, config) {
   await ensureContentScript(sourceTabId);
   const jobId = crypto.randomUUID();
   const limit = config?.limit || 10;
+
+  if (!continueBatch) {
+    await chrome.storage.local.remove(BATCH_ATTEMPTED_URLS_KEY);
+  }
   await setBatchState({
     status: 'RUNNING',
     message: 'Dang tim bai chua quet tren trang nhom...',

@@ -38,6 +38,8 @@ export const useStore = create((set, get) => ({
   syncState: 'Chưa đồng bộ',
   busy: false,
   logs: [],
+  scannedPostUrls: [],
+  batchAttemptedPostUrls: [],
 
   setStatus: (msg, isError = false) => set({ statusMsg: msg, statusError: isError }),
   setSyncMessage: (msg, isError = false) => set({ syncMessage: msg, syncError: isError }),
@@ -60,7 +62,8 @@ export const useStore = create((set, get) => ({
 
   init: async () => {
     const data = await chrome.storage.local.get([
-      STORAGE_KEY, META_KEY, BATCH_STATE_KEY, BATCH_CONFIG_KEY, API_URL_KEY, TOKEN_KEY
+      STORAGE_KEY, META_KEY, BATCH_STATE_KEY, BATCH_CONFIG_KEY, API_URL_KEY, TOKEN_KEY,
+      SCANNED_URLS_KEY, BATCH_ATTEMPTED_URLS_KEY
     ]);
     const storedItems = data[STORAGE_KEY];
     const storedBatch = data[BATCH_STATE_KEY];
@@ -79,6 +82,8 @@ export const useStore = create((set, get) => ({
       },
       apiBaseUrl: data[API_URL_KEY] || DEFAULT_API_URL,
       token: data[TOKEN_KEY] || '',
+      scannedPostUrls: Array.isArray(data[SCANNED_URLS_KEY]) ? data[SCANNED_URLS_KEY] : [],
+      batchAttemptedPostUrls: Array.isArray(data[BATCH_ATTEMPTED_URLS_KEY]) ? data[BATCH_ATTEMPTED_URLS_KEY] : [],
     });
     // load batch state from background
     get().loadBatchState();
@@ -355,6 +360,14 @@ chrome.storage.onChanged.addListener((changes, ns) => {
     updates.batchConfig = val && typeof val === 'object'
       ? { limit: 10, postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC, totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN, ignoreScanned: true, ...val }
       : { limit: 10, postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC, totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN, ignoreScanned: true };
+  }
+  if (changes[SCANNED_URLS_KEY]) {
+    const val = changes[SCANNED_URLS_KEY].newValue;
+    updates.scannedPostUrls = Array.isArray(val) ? val : [];
+  }
+  if (changes[BATCH_ATTEMPTED_URLS_KEY]) {
+    const val = changes[BATCH_ATTEMPTED_URLS_KEY].newValue;
+    updates.batchAttemptedPostUrls = Array.isArray(val) ? val : [];
   }
   if (Object.keys(updates).length) useStore.setState(updates);
 });

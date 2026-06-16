@@ -32,6 +32,19 @@ function shortenPostUrl(url) {
   }
 }
 
+function getPostId(url) {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/posts\/([^/]+)/) || u.pathname.match(/\/permalink\/([^/]+)/);
+    if (m) return m[1];
+    const parts = u.pathname.split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : url;
+  } catch {
+    const m = String(url).match(/\/posts\/([^/?#]+)/) || String(url).match(/\/permalink\/([^/?#]+)/);
+    return m ? m[1] : String(url).split('/').filter(Boolean).pop() || url;
+  }
+}
+
 function HeaderStats() {
   const items = useStore(s => s.items);
   const batchState = useStore(s => s.batchState);
@@ -134,6 +147,8 @@ function ScanActions() {
   const busy = useStore(s => s.busy);
   const scanSinglePost = useStore(s => s.scanSinglePost);
   const batchState = useStore(s => s.batchState);
+  const scannedPostUrls = useStore(s => s.scannedPostUrls);
+  const batchAttemptedPostUrls = useStore(s => s.batchAttemptedPostUrls);
   const postUrlRef = React.useRef(null);
 
   const isRunning = batchState.status === 'RUNNING';
@@ -179,8 +194,57 @@ function ScanActions() {
           <input type="checkbox" id="batchIgnoreScanned"
             checked={batchConfig.ignoreScanned || false}
             onChange={e => updateConfig('ignoreScanned', e.target.checked)} />
-          <span>Chỉ quét bài mới (Bỏ qua bài đã dán tem)</span>
+          <span>Bỏ qua bài viết đã quét thành công (Tránh quét trùng)</span>
         </label>
+
+        {/* Collapsible Panel for Logs/IDs */}
+        <details className="debug-ids-panel" style={{ marginTop: '10px', fontSize: '11px', background: '#f8fafc', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 'bold', color: '#475569', outline: 'none' }}>
+            📋 Chi tiết hàng chờ bỏ qua bài viết ({scannedPostUrls.length + batchAttemptedPostUrls.length} bài)
+          </summary>
+          <div style={{ marginTop: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+            <div style={{ marginBottom: '8px' }}>
+              <strong style={{ color: '#1e293b' }}>1. Đã quét thành công ({scannedPostUrls.length}):</strong>
+              {scannedPostUrls.length === 0 ? (
+                <div style={{ color: '#94a3b8', paddingLeft: '8px', marginTop: '2px' }}>Trống.</div>
+              ) : (
+                <ul style={{ margin: '4px 0', paddingLeft: '16px', listStyleType: 'disc', color: '#475569' }}>
+                  {scannedPostUrls.map((url, i) => {
+                    const id = getPostId(url);
+                    const statusText = batchConfig.ignoreScanned ? "Bỏ qua (Tránh quét trùng)" : "Sẽ quét lại";
+                    const statusColor = batchConfig.ignoreScanned ? "#ef4444" : "#2563eb";
+                    return (
+                      <li key={i} style={{ marginBottom: '2px', wordBreak: 'break-all' }} title={url}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{id}</span> -{' '}
+                        <span style={{ color: statusColor, fontWeight: 'bold' }}>{statusText}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+            <div>
+              <strong style={{ color: '#1e293b' }}>2. Đã quét/thử quét trong lượt chạy này ({batchAttemptedPostUrls.length}):</strong>
+              {batchAttemptedPostUrls.length === 0 ? (
+                <div style={{ color: '#94a3b8', paddingLeft: '8px', marginTop: '2px' }}>Trống (Sẽ làm mới khi chạy batch mới).</div>
+              ) : (
+                <ul style={{ margin: '4px 0', paddingLeft: '16px', listStyleType: 'disc', color: '#475569' }}>
+                  {batchAttemptedPostUrls.map((url, i) => {
+                    const id = getPostId(url);
+                    const isSuccess = scannedPostUrls.some(su => getPostId(su) === id);
+                    const statusText = isSuccess ? "Thành công (Bỏ qua)" : "Quét lỗi/Đang thử (Bỏ qua)";
+                    return (
+                      <li key={i} style={{ marginBottom: '2px', wordBreak: 'break-all' }} title={url}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{id}</span> -{' '}
+                        <span style={{ color: '#dc2626', fontWeight: 'bold' }}>{statusText}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </details>
       </div>
 
       {!isRunning && (
