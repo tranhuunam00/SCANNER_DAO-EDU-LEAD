@@ -45,7 +45,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'DEEP_SCAN_CURRENT_POST') {
     deepScanCurrentPost(
-      Number(message.maxRounds) || 20,
+      Number(message.maxTimeMs) || 120000,
       Number(message.maxClicksPerRound) || 40,
     )
       .then(sendResponse)
@@ -57,7 +57,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'DEEP_SCAN_AND_SAVE_CURRENT_POST') {
     deepScanCurrentPost(
-      Number(message.maxRounds) || 20,
+      Number(message.maxTimeMs) || 120000,
       Number(message.maxClicksPerRound) || 40,
     )
       .then(async (result) => {
@@ -76,7 +76,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'OPEN_SCAN_AND_CLOSE_FEED_POST') {
     openScanAndCloseFeedPost(
       message.target,
-      Number(message.maxRounds) || 20,
+      Number(message.maxTimeMs) || 120000,
       Number(message.maxClicksPerRound) || 40,
     )
       .then(sendResponse)
@@ -96,7 +96,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     activeGroupBatchJobId = String(message.jobId || '');
     groupBatchCancelRequested = false;
     sendResponse({ ok: true });
-    runGroupBatch(Number(message.limit) || 10, activeGroupBatchJobId)
+    runGroupBatch(message.limit, activeGroupBatchJobId, message.config)
       .catch(async (error) => {
         if (await isGroupBatchCancelled(activeGroupBatchJobId)) return;
         await updateContentBatchState({
@@ -130,14 +130,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-async function runGroupBatch(limit, jobId) {
+async function runGroupBatch(limit, jobId, config) {
   const batchLimit = Math.max(1, Math.floor(Number(limit) || 10));
   const scannedUrls = await getScannedUrlSet();
   const attemptedUrls = await getBatchAttemptedUrlSet();
-  const queue = globalThis.DaoEduBatchQueue.create(batchLimit, [
-    ...scannedUrls,
-    ...attemptedUrls,
-  ]);
+
+  const ignoreScanned = config?.ignoreScanned !== false;
+  const maxTotalDurationMs = (config?.totalTimeoutMin || 30) * 60 * 1000;
+  const postTimeoutMs = (config?.postTimeoutSec || 120) * 1000;
+  const startTime = Date.now();
+
+  const exclusions = [...attemptedUrls];
+  if (ignoreScanned) exclusions.push(...scannedUrls);
+
+  const queue = globalThis.DaoEduBatchQueue.create(batchLimit, exclusions);
   let successful = 0;
   let failed = 0;
   let emptyScrollRounds = 0;
@@ -145,8 +151,14 @@ async function runGroupBatch(limit, jobId) {
   let lastArticleCount = 0;
   applyScannedMarkers(scannedUrls);
 
+  let timeoutReached = false;
+
   while (!queue.isFull() && emptyScrollRounds < 12) {
     if (await isGroupBatchCancelled(jobId)) return;
+    if (Date.now() - startTime > maxTotalDurationMs) {
+      timeoutReached = true;
+      break;
+    }
     const currentHeight = document.documentElement.scrollHeight;
     const currentArticleCount = document.querySelectorAll('[role="article"]').length;
     
@@ -197,6 +209,7 @@ async function runGroupBatch(limit, jobId) {
         type: 'SCAN_POST_IN_BACKGROUND_TAB',
         postUrl,
         jobId,
+        config: { postTimeoutMs },
       });
       if (await isGroupBatchCancelled(jobId)) return;
       if (!result?.ok) {
@@ -257,15 +270,23 @@ async function runGroupBatch(limit, jobId) {
   if (await isGroupBatchCancelled(jobId)) return;
   const reachedLimit = targets.length >= batchLimit;
   const diagnostics = getBatchDiscoveryDiagnostics();
+
+  let finalMessage = '';
+  if (timeoutReached) {
+    finalMessage = `Ngung vi het tong thoi gian: ${successful} thanh cong, ${failed} loi.`;
+  } else if (reachedLimit) {
+    finalMessage = `Da xu ly ${targets.length} bai: ${successful} thanh cong, ${failed} loi.`;
+  } else if (targets.length) {
+    finalMessage = `Chi tim thay ${targets.length} bai moi: ${successful} thanh cong, ${failed} loi.`;
+  } else {
+    finalMessage = `Khong tim thay permalink bai viet (${diagnostics.extractedPostLinks} link bai/${diagnostics.anchorCount} link tren trang).`;
+  }
+
   await updateContentBatchState({
-    status: reachedLimit ? 'AWAITING_CONTINUE' : 'DONE',
+    status: reachedLimit && !timeoutReached ? 'AWAITING_CONTINUE' : 'DONE',
     current: targets.length,
     activePostUrl: null,
-    message: reachedLimit
-      ? `Da xu ly ${targets.length} bai: ${successful} thanh cong, ${failed} loi.`
-      : targets.length
-        ? `Chi tim thay ${targets.length} bai moi: ${successful} thanh cong, ${failed} loi.`
-        : `Khong tim thay permalink bai viet (${diagnostics.extractedPostLinks} link bai/${diagnostics.anchorCount} link tren trang).`,
+    message: finalMessage,
   });
 }
 
@@ -381,7 +402,7 @@ async function openScanAndCloseFeedPost(
   }
 
   try {
-    const result = await deepScanCurrentPost(maxRounds, maxClicksPerRound);
+    const result = await deepScanCurrentPost(timeoutMilliseconds, maxClicksPerRound);
     if (!result?.ok) return result;
 
     await saveScanResultLocally(result);
@@ -658,7 +679,7 @@ function isPostUrl(value) {
   }
 }
 
-async function deepScanCurrentPost(_maxRounds, maxClicksPerRound) {
+async function deepScanCurrentPost(maxTimeMs, maxClicksPerRound) {
   await waitForPostContent(15000);
 
   const pinnedPostUrl = getPostUrlForRoot(getPostRoot());
@@ -683,7 +704,12 @@ async function deepScanCurrentPost(_maxRounds, maxClicksPerRound) {
     };
   }
 
+  const startTime = Date.now();
+
   while (stablePasses < DEEP_SCAN_STABLE_PASSES) {
+    if (Date.now() - startTime > maxTimeMs) {
+      break;
+    }
     rounds += 1;
     const beforeItemCount = collected.size;
     const beforeState = getCommentLoadState();

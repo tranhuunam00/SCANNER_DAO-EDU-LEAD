@@ -5,6 +5,7 @@ const LEAD_ANALYSIS_KEY = "daoEduLeadScannerLeadAnalysis";
 const API_BASE_URL_KEY = "daoEduLeadScannerApiBaseUrl";
 const SCANNER_TOKEN_KEY = "daoEduLeadScannerToken";
 const SYNC_STATE_KEY = "daoEduLeadScannerSyncState";
+const BATCH_CONFIG_KEY = "daoEduLeadScannerBatchConfig";
 const MIN_PARSER_VERSION = 21;
 const RUNTIME_CONFIG = window.DaoEduScannerConfig || {};
 const DEFAULT_API_BASE_URL =
@@ -23,6 +24,10 @@ const clearAllButton = document.getElementById("clearAll");
 const syncBackendButton = document.getElementById("syncBackend");
 const apiBaseUrlInput = document.getElementById("apiBaseUrl");
 const scannerTokenInput = document.getElementById("scannerToken");
+const batchCountInput = document.getElementById("batchCount");
+const batchPostTimeInput = document.getElementById("batchPostTime");
+const batchTotalTimeInput = document.getElementById("batchTotalTime");
+const batchIgnoreScannedInput = document.getElementById("batchIgnoreScanned");
 const batchButton = document.getElementById("batch");
 const continueBatchButton = document.getElementById("continueBatch");
 const stopBatchButton = document.getElementById("stopBatch");
@@ -58,6 +63,20 @@ async function initializePopup() {
   await loadSyncSettings();
   await loadStoredData();
   await loadBatchState();
+  loadBatchConfig();
+
+  apiBaseUrlInput.onchange = () => saveSyncSettings();
+  scannerTokenInput.onchange = () => saveSyncSettings();
+
+  batchButton.onclick = () => {
+    saveBatchConfig();
+    startBatch(false);
+  };
+  continueBatchButton.onclick = () => {
+    saveBatchConfig();
+    startBatch(true);
+  };
+  stopBatchButton.onclick = () => stopBatchScan(true);
 }
 
 async function runDeepScan() {
@@ -823,9 +842,10 @@ async function startBatch(continueBatch) {
     }
 
     const response = await chrome.runtime.sendMessage({
-      type: "START_BATCH_SCAN",
+      type: "START_GROUP_BATCH",
       sourceTabId: tab.id,
       continueBatch,
+      config: getBatchConfig(),
     });
     if (!response?.ok) {
       throw new Error(response?.error || "Không thể bắt đầu quét hàng loạt.");
@@ -941,4 +961,30 @@ function normalizePostUrl(value) {
   } catch {
     return value;
   }
+}
+
+function getBatchConfig() {
+  return {
+    limit: parseInt(batchCountInput.value) || 10,
+    postTimeoutSec: parseInt(batchPostTimeInput.value) || 120,
+    totalTimeoutMin: parseInt(batchTotalTimeInput.value) || 30,
+    ignoreScanned: batchIgnoreScannedInput.checked,
+  };
+}
+
+function saveBatchConfig() {
+  chrome.storage.local.set({ [BATCH_CONFIG_KEY]: getBatchConfig() });
+}
+
+function loadBatchConfig() {
+  chrome.storage.local.get([BATCH_CONFIG_KEY]).then((data) => {
+    const config = data[BATCH_CONFIG_KEY];
+    if (!config) return;
+    if (config.limit) batchCountInput.value = config.limit;
+    if (config.postTimeoutSec) batchPostTimeInput.value = config.postTimeoutSec;
+    if (config.totalTimeoutMin) batchTotalTimeInput.value = config.totalTimeoutMin;
+    if (typeof config.ignoreScanned === "boolean") {
+      batchIgnoreScannedInput.checked = config.ignoreScanned;
+    }
+  });
 }

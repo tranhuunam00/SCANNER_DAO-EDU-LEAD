@@ -14,8 +14,8 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === 'START_BATCH_SCAN') {
-    startBatch(message.sourceTabId, message.continueBatch)
+  if (message?.type === 'START_GROUP_BATCH') {
+    startBatch(message.sourceTabId, message.continueBatch, message.config)
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({ ok: false, error: error.message || String(error) }),
@@ -42,6 +42,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       message.postUrl,
       message.jobId,
       _sender.tab?.windowId,
+      message.config
     )
       .then((result) => sendResponse(result))
       .catch((error) =>
@@ -64,11 +65,12 @@ async function startBatch(sourceTabId, continueBatch) {
 
   await ensureContentScript(sourceTabId);
   const jobId = crypto.randomUUID();
+  const limit = config?.limit || 10;
   await setBatchState({
     status: 'RUNNING',
     message: 'Dang tim bai chua quet tren trang nhom...',
     current: 0,
-    batchTotal: BATCH_SIZE,
+    batchTotal: limit,
     processedTotal: continueBatch ? (currentState.processedTotal || 0) : 0,
     failedTotal: continueBatch ? (currentState.failedTotal || 0) : 0,
     jobId,
@@ -83,7 +85,8 @@ async function startBatch(sourceTabId, continueBatch) {
 
   const response = await chrome.tabs.sendMessage(sourceTabId, {
     type: 'RUN_GROUP_BATCH',
-    limit: BATCH_SIZE,
+    limit,
+    config,
     jobId,
   });
   if (!response?.ok) {
@@ -143,7 +146,7 @@ async function stopBatch() {
   return { ok: true };
 }
 
-async function scanPostInBackgroundTab(postUrl, jobId, windowId) {
+async function scanPostInBackgroundTab(postUrl, jobId, windowId, config) {
   if (!isFacebookGroupPostUrl(postUrl)) {
     throw new Error('Link bai viet Facebook khong hop le.');
   }
@@ -161,14 +164,14 @@ async function scanPostInBackgroundTab(postUrl, jobId, windowId) {
       activePostUrl: normalizePostUrl(postUrl),
       activeScanTabId: scanTab.id,
     });
-    await waitForTabComplete(scanTab.id, postUrl, POST_SCAN_TIMEOUT_MS);
+    const postTimeoutMs = config?.postTimeoutMs || 120000;
+    await waitForTabComplete(scanTab.id, postUrl, postTimeoutMs);
     await assertBatchActive(jobId);
     await ensureContentScript(scanTab.id);
 
     const result = await chrome.tabs.sendMessage(scanTab.id, {
       type: 'DEEP_SCAN_AND_SAVE_CURRENT_POST',
-      maxRounds: 20,
-      maxClicksPerRound: 40,
+      maxTimeMs: postTimeoutMs,
     });
     if (!result?.ok) {
       throw new Error(result?.error || 'Khong doc duoc bai viet.');
