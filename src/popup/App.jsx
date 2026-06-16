@@ -210,31 +210,35 @@ function ScanActions() {
         Quét sâu bài viết đang mở
       </button>
 
+
       <div className="batch-settings">
-        <label>
-          <span>Số bài viết cần quét:</span>
-          <input type="number" id="batchCount" min="1" max="500"
-            value={batchConfig.limit}
-            onChange={e => updateConfig('limit', parseInt(e.target.value) || 10)} />
-        </label>
-        <label>
-          <span>Giới hạn mỗi bài (giây):</span>
-          <input type="number" id="batchPostTime" min="10"
-            value={batchConfig.postTimeoutSec}
-            onChange={e => updateConfig('postTimeoutSec', parseInt(e.target.value) || 120)} />
-        </label>
-        <label>
-          <span>Tổng thời gian quét (phút):</span>
-          <input type="number" id="batchTotalTime" min="1"
-            value={batchConfig.totalTimeoutMin}
-            onChange={e => updateConfig('totalTimeoutMin', parseInt(e.target.value) || 30)} />
-        </label>
+        <div className="settings-grid">
+          <div className="setting-col">
+            <span className="setting-label">Số bài viết</span>
+            <input type="number" id="batchCount" min="1" max="500"
+              value={batchConfig.limit}
+              onChange={e => updateConfig('limit', parseInt(e.target.value) || 10)} />
+          </div>
+          <div className="setting-col">
+            <span className="setting-label">Hạn mỗi bài (s)</span>
+            <input type="number" id="batchPostTime" min="10"
+              value={batchConfig.postTimeoutSec}
+              onChange={e => updateConfig('postTimeoutSec', parseInt(e.target.value) || 120)} />
+          </div>
+          <div className="setting-col">
+            <span className="setting-label">Tổng tối đa (m)</span>
+            <input type="number" id="batchTotalTime" min="1"
+              value={batchConfig.totalTimeoutMin}
+              onChange={e => updateConfig('totalTimeoutMin', parseInt(e.target.value) || 30)} />
+          </div>
+        </div>
         <label className="checkbox-label">
           <input type="checkbox" id="batchIgnoreScanned"
             checked={batchConfig.ignoreScanned || false}
             onChange={e => updateConfig('ignoreScanned', e.target.checked)} />
-          <span>Bỏ qua bài viết đã quét thành công (Tránh quét trùng)</span>
+          <span>Bỏ qua bài đã quét thành công (Tránh quét trùng)</span>
         </label>
+      </div>
 
         {/* Collapsible Panel for Logs/IDs */}
         {(() => {
@@ -407,7 +411,6 @@ function ScanActions() {
             </details>
           );
         })()}
-      </div>
 
       {!isRunning && (
         <button id="batch" className="batch" onClick={() => startBatch(false)}>
