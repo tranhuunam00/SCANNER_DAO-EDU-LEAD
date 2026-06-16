@@ -49,8 +49,12 @@ function BatchPanel() {
   const batchState = useStore(s => s.batchState);
   const stopBatch = useStore(s => s.stopBatch);
 
-  const { status, current, batchTotal, message, history } = batchState;
-  const hasHistory = history && history.length > 0;
+  const status = batchState.status || 'IDLE';
+  const current = batchState.current || 0;
+  const batchTotal = batchState.batchTotal || 0;
+  const message = batchState.message || '';
+  const history = Array.isArray(batchState.history) ? batchState.history : [];
+  const hasHistory = history.length > 0;
   const visible = status !== 'IDLE' || hasHistory;
   if (!visible) return null;
 
@@ -217,7 +221,8 @@ function SyncPanel() {
 }
 
 function PreviewSection() {
-  const items = useStore(s => s.items);
+  const rawItems = useStore(s => s.items);
+  const items = Array.isArray(rawItems) ? rawItems : [];
   const meta = useStore(s => s.meta);
 
   return (
@@ -248,19 +253,26 @@ function PreviewSection() {
 }
 
 function DebugLog() {
+  const rawLogs = useStore(s => s.logs);
+  const logs = Array.isArray(rawLogs) ? rawLogs : [];
   const batchState = useStore(s => s.batchState);
-  const statusMsg = useStore(s => s.statusMsg);
-  const syncMessage = useStore(s => s.syncMessage);
-  const logs = [];
-  if (statusMsg && statusMsg !== 'Sẵn sàng.') logs.push(statusMsg);
-  if (syncMessage) logs.push(syncMessage);
-  if (batchState.message) logs.push(batchState.message);
+  
+  const allLogs = [...logs];
+  if (batchState.message && !allLogs.some(l => l.includes(batchState.message))) {
+    allLogs.push(`[Batch] ${batchState.message}`);
+  }
+
+  const logRef = React.useRef(null);
+  // Auto-scroll xuống dưới khi có log mới
+  React.useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [allLogs.length]);
 
   return (
     <div className="panel">
       <h3 className="panel-header">Console Log</h3>
-      <div id="debugLog" style={{ height: '120px', overflowY: 'auto', background: '#f0f2f5', padding: '8px', fontFamily: 'monospace', fontSize: '11px', borderRadius: '4px' }}>
-        {logs.map((l, i) => <div key={i}>{l}</div>)}
+      <div id="debugLog" ref={logRef} style={{ height: '120px', overflowY: 'auto', background: '#f0f2f5', padding: '8px', fontFamily: 'monospace', fontSize: '11px', borderRadius: '4px' }}>
+        {allLogs.length === 0 ? <span style={{color:'#94a3b8'}}>Chưa có log nào.</span> : allLogs.map((l, i) => <div key={i} style={{marginBottom:'2px'}}>{l}</div>)}
       </div>
     </div>
   );

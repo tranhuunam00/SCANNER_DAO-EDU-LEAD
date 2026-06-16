@@ -39,10 +39,14 @@ export const useStore = create((set, get) => ({
     const data = await chrome.storage.local.get([
       STORAGE_KEY, META_KEY, BATCH_STATE_KEY, BATCH_CONFIG_KEY, API_URL_KEY, TOKEN_KEY
     ]);
+    const storedItems = data[STORAGE_KEY];
+    const storedBatch = data[BATCH_STATE_KEY];
     set({
-      items: data[STORAGE_KEY] || [],
+      items: Array.isArray(storedItems) ? storedItems : [],
       meta: data[META_KEY] || null,
-      batchState: data[BATCH_STATE_KEY] || { ...DEFAULT_BATCH_STATE },
+      batchState: storedBatch && typeof storedBatch === 'object'
+        ? { ...DEFAULT_BATCH_STATE, ...storedBatch, history: Array.isArray(storedBatch.history) ? storedBatch.history : [] }
+        : { ...DEFAULT_BATCH_STATE },
       batchConfig: data[BATCH_CONFIG_KEY] || { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true },
       apiBaseUrl: data[API_URL_KEY] || 'http://localhost:5000/api',
       token: data[TOKEN_KEY] || '',
@@ -62,9 +66,18 @@ export const useStore = create((set, get) => ({
   },
 
   loadBatchState: async () => {
-    const response = await chrome.runtime.sendMessage({ type: 'GET_BATCH_STATE' });
-    if (!response?.ok) return;
-    set({ batchState: response.state || { ...DEFAULT_BATCH_STATE } });
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'GET_BATCH_STATE' });
+      if (!response?.ok) return;
+      const s = response.state || {};
+      set({
+        batchState: {
+          ...DEFAULT_BATCH_STATE,
+          ...s,
+          history: Array.isArray(s.history) ? s.history : [],
+        }
+      });
+    } catch { /* background not ready */ }
   },
 
   startBatch: async (continueBatch = false) => {
@@ -114,20 +127,81 @@ export const useStore = create((set, get) => ({
     }
   },
 
+  addLog: (msg) => set(state => ({ logs: [...state.logs.slice(-49), `[${new Date().toLocaleTimeString('vi-VN')}] ${msg}`] })),
+
   scanSinglePost: async (postUrl) => {
-    set({ busy: true, statusMsg: 'Đang quét...', statusError: false });
+    const { addLog } = get();
+    set({ busy: true, statusMsg: 'Đang quét sâu toàn bộ bình luận...', statusError: false });
+    addLog('Bắt đầu quét sâu bài viết...');
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new Error('Không tìm thấy tab.');
-      const result = await chrome.runtime.sendMessage({
-        type: 'SCAN_POST_IN_BACKGROUND_TAB',
-        postUrl: postUrl || tab.url,
-        config: { postTimeoutMs: 15000 },
+      if (!tab?.id) throw new Error('Không tìm thấy tab đang mở.');
+      addLog(`Tab hiện tại: ${tab.url}`);
+
+      // Nếu có link dán vào thì điều hướng tab đó đến link trước
+      if (postUrl) {
+        addLog(`Mở link: ${postUrl}`);
+        await chrome.tabs.update(tab.id, { url: postUrl });
+        // Chờ tab load xong
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        addLog('Tab đã load xong, tiếp tục quét...');
+      }
+
+      // Đảm bảo content script đã được inject
+      addLog('Kiểm tra content script...');
+      try {
+        const ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING_SCANNER' });
+        addLog(`PING: ${ping?.ok ? 'OK' : 'Không phản hồi, sẽ inject lại'}`);
+        if (!ping?.ok) throw new Error('need inject');
+      } catch {
+        addLog('Inject content script...');
+        const manifest = chrome.runtime.getManifest();
+        const scripts = manifest.content_scripts?.[0]?.js || ['assets/batch-queue.js', 'assets/content.js'];
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: scripts });
+        await new Promise(resolve => setTimeout(resolve, 300));
+        addLog('Đã inject content script xong.');
+      }
+
+      // Gửi lệnh quét sâu THẲNG vào content script của tab - KHÔNG qua background
+      addLog('Gửi lệnh DEEP_SCAN_CURRENT_POST...');
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        type: 'DEEP_SCAN_CURRENT_POST',
+        maxRounds: 20,
+        maxClicksPerRound: 40,
       });
-      if (!result?.ok) throw new Error(result?.error || 'Quét thất bại.');
-      const note = result.summary.postDetected ? '' : ' Không thấy nội dung chữ của bài gốc nên đã lưu post rỗng.';
-      set({ statusMsg: `Đã quét ${result.summary.posts} bài và ${result.summary.comments} bình luận.${note}` });
+
+      addLog(`Kết quả: ok=${result?.ok}, posts=${result?.summary?.posts}, comments=${result?.summary?.comments}`);
+
+      if (!result?.ok) throw new Error(result?.error || 'Không đọc được nội dung Facebook.');
+
+      // Merge và lưu vào storage
+      const stored = await chrome.storage.local.get(STORAGE_KEY);
+      const existing = stored[STORAGE_KEY] || [];
+      const retained = existing.filter(item => item.pageUrl !== result.summary.postUrl);
+      
+      // Merge items
+      const map = new Map(retained.map(i => [i.fingerprint, i]));
+      for (const item of (result.items || [])) {
+        map.set(item.fingerprint, { ...map.get(item.fingerprint), ...item, lastSeenAt: new Date().toISOString() });
+      }
+      const merged = [...map.values()].sort((a, b) => String(b.capturedAt).localeCompare(String(a.capturedAt)));
+
+      const meta = {
+        scannedAt: new Date().toISOString(),
+        pageUrl: tab.url,
+        lastPostCount: result.summary.posts,
+        lastCommentCount: result.summary.comments,
+        postUrl: result.summary.postUrl,
+      };
+
+      await chrome.storage.local.set({ [STORAGE_KEY]: merged, [META_KEY]: meta });
+
+      const note = result.summary.postDetected ? '' : ' Không thấy nội dung bài gốc.';
+      const msg = `Đã quét ${result.summary.posts} bài và ${result.summary.comments} bình luận.${note}`;
+      set({ statusMsg: msg, statusError: false });
+      addLog(msg);
     } catch (e) {
+      addLog(`Lỗi: ${e.message}`);
       set({ statusMsg: e.message, statusError: true });
     } finally {
       set({ busy: false });
@@ -208,8 +282,16 @@ export const useStore = create((set, get) => ({
 chrome.storage.onChanged.addListener((changes, ns) => {
   if (ns !== 'local') return;
   const updates = {};
-  if (changes[STORAGE_KEY]) updates.items = changes[STORAGE_KEY].newValue || [];
+  if (changes[STORAGE_KEY]) {
+    const val = changes[STORAGE_KEY].newValue;
+    updates.items = Array.isArray(val) ? val : [];
+  }
   if (changes[META_KEY]) updates.meta = changes[META_KEY].newValue || null;
-  if (changes[BATCH_STATE_KEY]) updates.batchState = changes[BATCH_STATE_KEY].newValue || { ...DEFAULT_BATCH_STATE };
+  if (changes[BATCH_STATE_KEY]) {
+    const val = changes[BATCH_STATE_KEY].newValue;
+    updates.batchState = val && typeof val === 'object'
+      ? { ...DEFAULT_BATCH_STATE, ...val, history: Array.isArray(val.history) ? val.history : [] }
+      : { ...DEFAULT_BATCH_STATE };
+  }
   if (Object.keys(updates).length) useStore.setState(updates);
 });

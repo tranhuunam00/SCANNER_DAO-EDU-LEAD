@@ -2345,7 +2345,6 @@ const renderIntervalId = setInterval(async () => {
   } catch (error) {
     if (String(error).includes('Extension context invalidated')) {
       clearInterval(renderIntervalId);
-      clearInterval(syncIntervalId);
     }
   }
 }, 2000);
