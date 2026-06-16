@@ -36,6 +36,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
 
+  if (message?.type === 'FORCE_SYNC_SCANNED_POSTS') {
+    lastSyncedGroupUrl = '';
+    syncBackendScannedPosts().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   if (message?.type === 'COLLECT_POST_LINKS') {
     sendResponse(
       collectPostLinks(message.scannedUrls || [], message.limit || 100),
@@ -87,15 +93,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === 'RUN_GROUP_BATCH') {
-    if (groupBatchRunning) {
-      sendResponse({ ok: false, error: 'Batch scan is already running.' });
-      return;
-    }
-
+    groupBatchCancelRequested = true; // Signal any ghost loop to die
+    
     groupBatchRunning = true;
     activeGroupBatchJobId = String(message.jobId || '');
     groupBatchCancelRequested = false;
     sendResponse({ ok: true });
+    
     runGroupBatch(message.limit, activeGroupBatchJobId, message.config)
       .catch(async (error) => {
         if (await isGroupBatchCancelled(activeGroupBatchJobId)) return;
@@ -105,17 +109,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         });
       })
       .finally(() => {
-        groupBatchRunning = false;
-        activeGroupBatchJobId = '';
-        groupBatchCancelRequested = false;
+        if (activeGroupBatchJobId === message.jobId) {
+          groupBatchRunning = false;
+          activeGroupBatchJobId = '';
+          groupBatchCancelRequested = false;
+        }
       });
     return;
   }
 
   if (message?.type === 'CANCEL_GROUP_BATCH') {
-    if (!message.jobId || message.jobId === activeGroupBatchJobId) {
-      groupBatchCancelRequested = true;
-    }
+    groupBatchCancelRequested = true;
+    groupBatchRunning = false;
+    activeGroupBatchJobId = '';
     sendResponse({ ok: true });
     return;
   }

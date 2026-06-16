@@ -94,15 +94,12 @@
             placeholder="http://localhost:5000/api"
             autocomplete="off"
           />
-          <input
-            id="scannerToken"
-            type="password"
-            placeholder="Scanner token nếu BE có bật"
-            autocomplete="off"
-          />
         </div>
         <button id="syncBackend" class="sync-button">
-          Đồng bộ BE & xóa local đã lưu
+          Đồng bộ Data lên BE & Xóa local
+        </button>
+        <button id="forceSyncTem" class="sync-button" style="margin-top: 8px; background-color: #2563eb; color: #ffffff; border: none; font-weight: bold;">
+          Tải lại Tem đã quét từ BE xuống
         </button>
         <p id="syncMessage" class="sync-message"></p>
       </section>

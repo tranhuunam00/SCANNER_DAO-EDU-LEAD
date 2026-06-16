@@ -2,14 +2,12 @@ const STORAGE_KEY = "daoEduLeadScannerItems";
 const META_KEY = "daoEduLeadScannerMeta";
 const SCANNED_URLS_KEY = "daoEduLeadScannerScannedPostUrls";
 const API_BASE_URL_KEY = "daoEduLeadScannerApiBaseUrl";
-const SCANNER_TOKEN_KEY = "daoEduLeadScannerToken";
 const SYNC_STATE_KEY = "daoEduLeadScannerSyncState";
 const BATCH_CONFIG_KEY = "daoEduLeadScannerBatchConfig";
 const MIN_PARSER_VERSION = 21;
 const RUNTIME_CONFIG = window.DaoEduScannerConfig || {};
 const DEFAULT_API_BASE_URL =
   RUNTIME_CONFIG.apiBaseUrl || "http://103.90.227.173:5000/api";
-const DEFAULT_SCANNER_TOKEN = RUNTIME_CONFIG.scannerToken || "";
 const SYNC_ENDPOINT = normalizeSyncEndpoint(
   RUNTIME_CONFIG.syncEndpoint || "/facebook-lead-scans",
 );
@@ -18,8 +16,8 @@ const scanButton = document.getElementById("scan");
 const postUrlInput = document.getElementById("postUrl");
 const forceStopButton = document.getElementById("forceStop");
 const syncBackendButton = document.getElementById("syncBackend");
+const forceSyncTemButton = document.getElementById("forceSyncTem");
 const apiBaseUrlInput = document.getElementById("apiBaseUrl");
-const scannerTokenInput = document.getElementById("scannerToken");
 const batchCountInput = document.getElementById("batchCount");
 const batchPostTimeInput = document.getElementById("batchPostTime");
 const batchTotalTimeInput = document.getElementById("batchTotalTime");
@@ -35,16 +33,34 @@ const previewNode = document.getElementById("preview");
 scanButton.addEventListener("click", runDeepScan);
 forceStopButton.addEventListener("click", forceStopAll);
 syncBackendButton.addEventListener("click", syncToBackend);
+forceSyncTemButton.addEventListener("click", async () => {
+  setSyncMessage("Đang tải lại tem từ BE...");
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error("Chưa mở tab Facebook nào.");
+    
+    await ensureContentScript(tab.id);
+    const res = await chrome.tabs.sendMessage(tab.id, { type: "FORCE_SYNC_SCANNED_POSTS" });
+    
+    if (res?.ok) {
+      setSyncMessage("Đã tải xong tem từ BE!", false);
+    } else {
+      throw new Error("BE không phản hồi hoặc từ chối kết nối.");
+    }
+  } catch (err) {
+    if (String(err.message).includes("Receiving end does not exist")) {
+      setSyncMessage("Vui lòng tải lại trang (F5) Facebook trước khi đồng bộ.", true);
+    } else {
+      setSyncMessage(err.message || "Lỗi kết nối tải tem.", true);
+    }
+  }
+});
 apiBaseUrlInput.addEventListener("change", () =>
   saveSyncSettings().catch((error) =>
     setSyncMessage(error.message || "Không lưu được cấu hình BE.", true),
   ),
 );
-scannerTokenInput.addEventListener("change", () =>
-  saveSyncSettings().catch((error) =>
-    setSyncMessage(error.message || "Không lưu được cấu hình BE.", true),
-  ),
-);
+
 batchButton.addEventListener("click", () => startBatch(false));
 continueBatchButton.addEventListener("click", () => startBatch(true));
 stopBatchButton.addEventListener("click", () => stopBatchScan(true));
@@ -58,8 +74,9 @@ async function initializePopup() {
   await loadBatchState();
   loadBatchConfig();
 
+
+
   apiBaseUrlInput.onchange = () => saveSyncSettings();
-  scannerTokenInput.onchange = () => saveSyncSettings();
 
   batchButton.onclick = () => {
     saveBatchConfig();
@@ -255,7 +272,6 @@ async function syncToBackend() {
     const data = await chrome.storage.local.get([
       META_KEY,
       API_BASE_URL_KEY,
-      SCANNER_TOKEN_KEY,
       SYNC_STATE_KEY,
     ]);
     const meta = data[META_KEY] || {};
@@ -289,9 +305,6 @@ async function syncToBackend() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(data[SCANNER_TOKEN_KEY]
-          ? { "x-dao-edu-scanner-token": data[SCANNER_TOKEN_KEY] }
-          : {}),
       },
       body: JSON.stringify({
         source: "DAO_EDU_FACEBOOK_EXTENSION",
@@ -354,11 +367,9 @@ async function syncToBackend() {
 async function loadSyncSettings() {
   const data = await chrome.storage.local.get([
     API_BASE_URL_KEY,
-    SCANNER_TOKEN_KEY,
     SYNC_STATE_KEY,
   ]);
   apiBaseUrlInput.value = data[API_BASE_URL_KEY] || DEFAULT_API_BASE_URL;
-  scannerTokenInput.value = data[SCANNER_TOKEN_KEY] || DEFAULT_SCANNER_TOKEN;
   renderSyncState(data[SYNC_STATE_KEY] || null);
 }
 
@@ -630,14 +641,12 @@ async function clearAllCache() {
 function setBusy(busy) {
   scanButton.disabled = busy;
   postUrlInput.disabled = busy;
-  exportRawButton.disabled = busy;
-  exportButton.disabled = busy;
   syncBackendButton.disabled = busy;
+  forceSyncTemButton.disabled = busy;
   apiBaseUrlInput.disabled = busy;
-  scannerTokenInput.disabled = busy;
   batchButton.disabled = busy;
   continueBatchButton.disabled = busy;
-  clearAllButton.disabled = busy;
+  forceStopButton.disabled = busy;
 }
 
 function setStatus(message, isError = false) {
