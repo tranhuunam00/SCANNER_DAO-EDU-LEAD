@@ -2306,4 +2306,12 @@ async function syncBackendScannedPosts() {
 setInterval(syncBackendScannedPosts, 3000);
 setTimeout(syncBackendScannedPosts, 1000);
 
+setInterval(async () => {
+  if (globalThis.__daoEduLeadScannerContentVersion !== CONTENT_SCRIPT_VERSION) return;
+  const isGroup = location.pathname.startsWith('/groups/');
+  if (!isGroup) return;
+  const scanned = await getScannedUrlSet();
+  applyScannedMarkers(scanned);
+}, 2000);
+
 })();
