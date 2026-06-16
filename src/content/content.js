@@ -1924,17 +1924,37 @@ function extractCommentText(scope, authorName) {
 }
 
 function findAuthor(container, options = {}) {
-  const anonymousName = [...container.querySelectorAll('strong, [dir="auto"]')]
-    .map((node) => cleanText(node.innerText || node.textContent))
-    .find((name) =>
+  // 1. Duyệt các phần tử theo thứ tự DOM để tìm tác giả thực tế trước khi bị nhiễu bởi các mention trong nội dung
+  const elements = container.querySelectorAll('a[href], strong, [dir="auto"]');
+  for (const el of elements) {
+    // Nếu gặp tên người tham gia ẩn danh trước
+    const text = cleanText(el.innerText || el.textContent);
+    if (
       /^(nguoi tham gia an danh|anonymous participant)\b/.test(
-        normalizeUiText(name),
-      ),
-    );
-  if (anonymousName) {
-    return { name: anonymousName, url: '' };
+        normalizeUiText(text),
+      )
+    ) {
+      return { name: text, url: '' };
+    }
+
+    // Nếu gặp một link và nó là link profile hợp lệ
+    if (el.tagName === 'A') {
+      const href = el.getAttribute('href') || '';
+      if (isProfileUrl(href)) {
+        const name = getLinkLabel(el, container);
+        if (
+          name &&
+          name.length >= 2 &&
+          name.length <= 100 &&
+          !isInterfaceText(name)
+        ) {
+          return { name, url: href };
+        }
+      }
+    }
   }
 
+  // 2. Fallback duyệt theo candidates (danh sách link profile được chấm điểm)
   const candidates = [...container.querySelectorAll('a[href]')]
     .map((link) => ({
       link,
@@ -1954,10 +1974,26 @@ function findAuthor(container, options = {}) {
         scoreAuthorCandidate(a, options),
     );
 
-  return {
-    name: candidates[0]?.name || '',
-    url: candidates[0]?.href || '',
-  };
+  if (candidates.length) {
+    return {
+      name: candidates[0].name,
+      url: candidates[0].href,
+    };
+  }
+
+  // 3. Fallback cuối cùng cho người tham gia ẩn danh
+  const anonymousName = [...container.querySelectorAll('strong, [dir="auto"]')]
+    .map((node) => cleanText(node.innerText || node.textContent))
+    .find((name) =>
+      /^(nguoi tham gia an danh|anonymous participant)\b/.test(
+        normalizeUiText(name),
+      ),
+    );
+  if (anonymousName) {
+    return { name: anonymousName, url: '' };
+  }
+
+  return { name: '', url: '' };
 }
 
 function getLinkLabel(link, boundary) {
@@ -2187,6 +2223,7 @@ function isProfileUrl(href) {
     if (!url.hostname.endsWith('facebook.com')) return false;
     if (url.pathname === '/profile.php') return url.searchParams.has('id');
     if (url.pathname.includes('/user/')) return true;
+    if (url.pathname.includes('/people/')) return true;
     return /^\/(?!groups|watch|reel|photo|photos|permalink|story|share|help|settings|events|marketplace|gaming|notifications|messages|plugins)[^/?#]+\/?$/.test(
       url.pathname,
     );
