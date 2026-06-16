@@ -30,10 +30,26 @@ export const useStore = create((set, get) => ({
   syncError: false,
   syncState: 'Chưa đồng bộ',
   busy: false,
+  logs: [],
 
   setStatus: (msg, isError = false) => set({ statusMsg: msg, statusError: isError }),
   setSyncMessage: (msg, isError = false) => set({ syncMessage: msg, syncError: isError }),
   setBusy: (busy) => set({ busy }),
+
+  exportJson: async () => {
+    const { items, batchState, meta } = get();
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      meta,
+      items,
+      batchHistory: Array.isArray(batchState.history) ? batchState.history : [],
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    await chrome.downloads.download({ url, filename: `dao-edu-scanner-raw-${ts}.json`, saveAs: false });
+    URL.revokeObjectURL(url);
+  },
 
   init: async () => {
     const data = await chrome.storage.local.get([

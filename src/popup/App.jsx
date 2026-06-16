@@ -283,6 +283,7 @@ export default function App() {
   const statusMsg = useStore(s => s.statusMsg);
   const statusError = useStore(s => s.statusError);
   const forceStop = useStore(s => s.forceStop);
+  const exportJson = useStore(s => s.exportJson);
   const loadBatchState = useStore(s => s.loadBatchState);
 
   useEffect(() => {
@@ -314,6 +315,10 @@ export default function App() {
       <PreviewSection />
 
       <footer>
+        <button id="exportJson" className="sync-button" onClick={exportJson}
+          style={{ gridColumn: '1 / -1', borderColor: '#7c3aed', color: '#7c3aed', background: '#f5f3ff' }}>
+          ⬇️ Xuất file JSON Raw
+        </button>
         <button id="forceStop" className="danger clear-all" onClick={forceStop}>
           Dừng &amp; Xóa toàn bộ tiến trình ngầm
         </button>
