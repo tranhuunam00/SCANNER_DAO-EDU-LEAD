@@ -1,6 +1,6 @@
 {
   "name": "dao-edu-lead-scanner",
-  "version": "1.0.37",
+  "version": "1.0.39",
   "private": true,
   "description": "Internal Chrome extension for scanning DAO EDU Facebook leads.",
   "scripts": {

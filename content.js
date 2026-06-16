@@ -1,6 +1,6 @@
 (function initializeDaoEduLeadScannerContent() {
-if (globalThis.__daoEduLeadScannerContentVersion === 34) return;
-globalThis.__daoEduLeadScannerContentVersion = 34;
+if (globalThis.__daoEduLeadScannerContentVersion === 35) return;
+globalThis.__daoEduLeadScannerContentVersion = 35;
 
 const EXPAND_TEXT_PATTERNS = [
   /^xem thêm bình luận$/i,
@@ -22,7 +22,7 @@ const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const BATCH_ATTEMPTED_URLS_KEY =
   'daoEduLeadScannerBatchAttemptedPostUrls';
 const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-const CONTENT_SCRIPT_VERSION = 34;
+const CONTENT_SCRIPT_VERSION = 35;
 const DEEP_SCAN_STABLE_PASSES = 4;
 const MAX_STALLED_CLICKS_PER_EXPANDER = 4;
 const commentExpanderAttemptCounts = new Map();
@@ -612,7 +612,7 @@ async function markBatchAttemptedLocally(postUrl) {
 
 function isPostUrl(value) {
   try {
-    return /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(
+    return /\/groups\/[^/?#]+\/(?:posts|permalink)\/[^/?#]+/.test(
       new URL(value, location.origin).pathname,
     );
   } catch {
@@ -927,6 +927,7 @@ function collectPostLinks(scannedUrls, limit) {
   const targets = feedArticles
     .map((article, index) => {
       const postUrl =
+        getFeedArticlePostUrl(article) ||
         [...article.querySelectorAll('a[href]')]
           .map(getPostUrlFromLink)
           .find(Boolean) || '';
@@ -1082,7 +1083,7 @@ function extractGroupPostUrl(value) {
   try {
     const url = new URL(value, location.origin);
     const directMatch = url.pathname.match(
-      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+      /\/groups\/([^/?#]+)\/(?:posts|permalink)\/([^/?#]+)/,
     );
     if (directMatch) {
       return normalizePostUrl(
@@ -1098,14 +1099,20 @@ function extractGroupPostUrl(value) {
       }
     }
 
-    const groupId = location.pathname.match(/^\/groups\/([^/]+)/)?.[1] || '';
-    const postId =
-      url.searchParams.get('story_fbid') ||
-      url.searchParams.get('multi_permalinks') ||
-      url.searchParams.get('post_id') ||
-      url.searchParams.get('set')?.match(/^gm\.(\d+)$/)?.[1] ||
+    const groupId =
+      location.pathname.match(/^\/groups\/([^/]+)/)?.[1] ||
+      url.searchParams.get('group_id') ||
+      url.searchParams.get('id') ||
       '';
-    if (groupId && /^\d+$/.test(postId)) {
+    const postId = normalizePostId(
+      url.searchParams.get('story_fbid') ||
+        url.searchParams.get('multi_permalinks') ||
+        url.searchParams.get('post_id') ||
+        url.searchParams.get('fbid') ||
+        url.searchParams.get('set')?.match(/^gm\.([^,&]+)$/)?.[1] ||
+        '',
+    );
+    if (groupId && postId) {
       return normalizePostUrl(
         `https://www.facebook.com/groups/${groupId}/posts/${postId}/`,
       );
@@ -1114,6 +1121,15 @@ function extractGroupPostUrl(value) {
     return '';
   }
   return '';
+}
+
+function normalizePostId(value) {
+  return (
+    String(value || '')
+      .split(',')[0]
+      .trim()
+      .match(/^[A-Za-z0-9_.:-]+/)?.[0] || ''
+  );
 }
 
 function applyScannedMarkers(scanned) {
@@ -1773,7 +1789,7 @@ function extractPostId(value) {
   try {
     const url = new URL(value, location.origin);
     const match = url.pathname.match(
-      /\/groups\/[^/]+\/(?:posts|permalink)\/(\d+)/,
+      /\/groups\/[^/?#]+\/(?:posts|permalink)\/([^/?#]+)/,
     );
     return match?.[1] || hash(normalizePostUrl(value));
   } catch {
@@ -1939,14 +1955,14 @@ function getCanonicalPostUrl() {
   current.hash = '';
 
   const permalinkMatch = current.pathname.match(
-    /^\/groups\/([^/]+)\/permalink\/(\d+)/,
+    /^\/groups\/([^/?#]+)\/permalink\/([^/?#]+)/,
   );
   if (permalinkMatch) {
     return `https://www.facebook.com/groups/${permalinkMatch[1]}/permalink/${permalinkMatch[2]}/`;
   }
 
   const postMatch = current.pathname.match(
-    /^\/groups\/([^/]+)\/posts\/(\d+)/,
+    /^\/groups\/([^/?#]+)\/posts\/([^/?#]+)/,
   );
   if (postMatch) {
     return `https://www.facebook.com/groups/${postMatch[1]}/posts/${postMatch[2]}/`;
@@ -2054,7 +2070,7 @@ function normalizePostUrl(value) {
   try {
     const url = new URL(value, location.origin);
     const match = url.pathname.match(
-      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+      /\/groups\/([^/?#]+)\/(?:posts|permalink)\/([^/?#]+)/,
     );
     if (match) {
       url.hostname = 'www.facebook.com';

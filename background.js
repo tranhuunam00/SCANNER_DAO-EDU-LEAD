@@ -305,7 +305,7 @@ function isFacebookGroupPostUrl(value) {
     const url = new URL(value);
     return (
       isFacebookHostname(url.hostname) &&
-      /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(url.pathname)
+      /\/groups\/[^/?#]+\/(?:posts|permalink)\/[^/?#]+/.test(url.pathname)
     );
   } catch {
     return false;
@@ -315,7 +315,7 @@ function isFacebookGroupPostUrl(value) {
 function getPostIdentity(value) {
   try {
     const match = new URL(value).pathname.match(
-      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+      /\/groups\/([^/?#]+)\/(?:posts|permalink)\/([^/?#]+)/,
     );
     return match?.[2] || '';
   } catch {
@@ -330,7 +330,7 @@ function isFacebookHostname(hostname) {
 function normalizePostUrl(value) {
   const url = new URL(value);
   const match = url.pathname.match(
-    /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+    /\/groups\/([^/?#]+)\/(?:posts|permalink)\/([^/?#]+)/,
   );
   if (match) {
     url.hostname = 'www.facebook.com';

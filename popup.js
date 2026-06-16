@@ -1,55 +1,55 @@
-const STORAGE_KEY = 'daoEduLeadScannerItems';
-const META_KEY = 'daoEduLeadScannerMeta';
-const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
-const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
-const API_BASE_URL_KEY = 'daoEduLeadScannerApiBaseUrl';
-const SCANNER_TOKEN_KEY = 'daoEduLeadScannerToken';
-const SYNC_STATE_KEY = 'daoEduLeadScannerSyncState';
+const STORAGE_KEY = "daoEduLeadScannerItems";
+const META_KEY = "daoEduLeadScannerMeta";
+const SCANNED_URLS_KEY = "daoEduLeadScannerScannedPostUrls";
+const LEAD_ANALYSIS_KEY = "daoEduLeadScannerLeadAnalysis";
+const API_BASE_URL_KEY = "daoEduLeadScannerApiBaseUrl";
+const SCANNER_TOKEN_KEY = "daoEduLeadScannerToken";
+const SYNC_STATE_KEY = "daoEduLeadScannerSyncState";
 const MIN_PARSER_VERSION = 21;
 const RUNTIME_CONFIG = window.DaoEduScannerConfig || {};
 const DEFAULT_API_BASE_URL =
-  RUNTIME_CONFIG.apiBaseUrl || 'http://localhost:5000/api';
-const DEFAULT_SCANNER_TOKEN = RUNTIME_CONFIG.scannerToken || '';
+  RUNTIME_CONFIG.apiBaseUrl || "http://103.90.227.173:5000/api";
+const DEFAULT_SCANNER_TOKEN = RUNTIME_CONFIG.scannerToken || "";
 const SYNC_ENDPOINT = normalizeSyncEndpoint(
-  RUNTIME_CONFIG.syncEndpoint || '/facebook-lead-scans',
+  RUNTIME_CONFIG.syncEndpoint || "/facebook-lead-scans",
 );
 
-const scanButton = document.getElementById('scan');
-const postUrlInput = document.getElementById('postUrl');
-const exportRawButton = document.getElementById('exportRaw');
-const exportButton = document.getElementById('export');
-const clearButton = document.getElementById('clear');
-const clearAllButton = document.getElementById('clearAll');
-const syncBackendButton = document.getElementById('syncBackend');
-const apiBaseUrlInput = document.getElementById('apiBaseUrl');
-const scannerTokenInput = document.getElementById('scannerToken');
-const batchButton = document.getElementById('batch');
-const continueBatchButton = document.getElementById('continueBatch');
-const stopBatchButton = document.getElementById('stopBatch');
-const statusNode = document.getElementById('status');
-const syncStateNode = document.getElementById('syncState');
-const syncMessageNode = document.getElementById('syncMessage');
-const previewNode = document.getElementById('preview');
+const scanButton = document.getElementById("scan");
+const postUrlInput = document.getElementById("postUrl");
+const exportRawButton = document.getElementById("exportRaw");
+const exportButton = document.getElementById("export");
+const clearButton = document.getElementById("clear");
+const clearAllButton = document.getElementById("clearAll");
+const syncBackendButton = document.getElementById("syncBackend");
+const apiBaseUrlInput = document.getElementById("apiBaseUrl");
+const scannerTokenInput = document.getElementById("scannerToken");
+const batchButton = document.getElementById("batch");
+const continueBatchButton = document.getElementById("continueBatch");
+const stopBatchButton = document.getElementById("stopBatch");
+const statusNode = document.getElementById("status");
+const syncStateNode = document.getElementById("syncState");
+const syncMessageNode = document.getElementById("syncMessage");
+const previewNode = document.getElementById("preview");
 
-scanButton.addEventListener('click', runDeepScan);
-exportRawButton.addEventListener('click', exportRawJson);
-exportButton.addEventListener('click', exportJson);
-clearButton.addEventListener('click', clearStorage);
-clearAllButton.addEventListener('click', clearAllCache);
-syncBackendButton.addEventListener('click', syncToBackend);
-apiBaseUrlInput.addEventListener('change', () =>
+scanButton.addEventListener("click", runDeepScan);
+exportRawButton.addEventListener("click", exportRawJson);
+exportButton.addEventListener("click", exportJson);
+clearButton.addEventListener("click", clearStorage);
+clearAllButton.addEventListener("click", clearAllCache);
+syncBackendButton.addEventListener("click", syncToBackend);
+apiBaseUrlInput.addEventListener("change", () =>
   saveSyncSettings().catch((error) =>
-    setSyncMessage(error.message || 'Không lưu được cấu hình BE.', true),
+    setSyncMessage(error.message || "Không lưu được cấu hình BE.", true),
   ),
 );
-scannerTokenInput.addEventListener('change', () =>
+scannerTokenInput.addEventListener("change", () =>
   saveSyncSettings().catch((error) =>
-    setSyncMessage(error.message || 'Không lưu được cấu hình BE.', true),
+    setSyncMessage(error.message || "Không lưu được cấu hình BE.", true),
   ),
 );
-batchButton.addEventListener('click', () => startBatch(false));
-continueBatchButton.addEventListener('click', () => startBatch(true));
-stopBatchButton.addEventListener('click', () => stopBatchScan(true));
+batchButton.addEventListener("click", () => startBatch(false));
+continueBatchButton.addEventListener("click", () => startBatch(true));
+stopBatchButton.addEventListener("click", () => stopBatchScan(true));
 
 initializePopup();
 window.setInterval(loadBatchState, 1000);
@@ -62,20 +62,20 @@ async function initializePopup() {
 
 async function runDeepScan() {
   setBusy(true);
-  setStatus('Đang quét sâu toàn bộ bình luận...');
+  setStatus("Đang quét sâu toàn bộ bình luận...");
 
   try {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const inputUrl = normalizeInputPostUrl(postUrlInput.value);
     if (postUrlInput.value.trim() && !inputUrl) {
-      throw new Error('Link không hợp lệ. Hãy dán link bài viết Facebook.');
+      throw new Error("Link không hợp lệ. Hãy dán link bài viết Facebook.");
     }
-    if (!tab?.id) throw new Error('Không tìm thấy tab đang mở.');
+    if (!tab?.id) throw new Error("Không tìm thấy tab đang mở.");
     if (!inputUrl && !isFacebookUrl(tab.url)) {
-      throw new Error('Hãy mở bài viết Facebook hoặc dán link bài cần quét.');
+      throw new Error("Hãy mở bài viết Facebook hoặc dán link bài cần quét.");
     }
     if (inputUrl) {
-      setStatus('Đang mở bài viết từ link...');
+      setStatus("Đang mở bài viết từ link...");
       tab = await chrome.tabs.update(tab.id, { url: inputUrl });
       await waitForTabComplete(tab.id, inputUrl);
     }
@@ -83,13 +83,13 @@ async function runDeepScan() {
     await ensureContentScript(tab.id);
 
     const result = await chrome.tabs.sendMessage(tab.id, {
-      type: 'DEEP_SCAN_CURRENT_POST',
+      type: "DEEP_SCAN_CURRENT_POST",
       maxRounds: 20,
       maxClicksPerRound: 40,
     });
 
     if (!result?.ok) {
-      throw new Error(result?.error || 'Không đọc được nội dung Facebook.');
+      throw new Error(result?.error || "Không đọc được nội dung Facebook.");
     }
 
     const existing = await getStoredItems();
@@ -100,7 +100,7 @@ async function runDeepScan() {
     const meta = {
       scannedAt: new Date().toISOString(),
       pageUrl: tab.url,
-      pageTitle: tab.title || '',
+      pageTitle: tab.title || "",
       lastPostCount: result.summary.posts,
       lastCommentCount: result.summary.comments,
       clickedExpanders: result.summary.clickedExpanders || 0,
@@ -120,13 +120,13 @@ async function runDeepScan() {
     render(merged, meta);
     await analyzeAndRenderLeads(merged);
     const postNote = result.summary.postDetected
-      ? ''
-      : ' Không thấy nội dung chữ của bài gốc nên đã lưu post rỗng.';
+      ? ""
+      : " Không thấy nội dung chữ của bài gốc nên đã lưu post rỗng.";
     setStatus(
       `Đã quét ${result.summary.posts} bài và ${result.summary.comments} bình luận.${postNote}`,
     );
   } catch (error) {
-    setStatus(error.message || 'Quét thất bại.', true);
+    setStatus(error.message || "Quét thất bại.", true);
   } finally {
     setBusy(false);
   }
@@ -183,15 +183,15 @@ function mergeItems(existing, incoming) {
 }
 
 function render(items, meta) {
-  const posts = items.filter((item) => item.kind === 'POST');
-  const comments = items.filter((item) => item.kind === 'COMMENT');
+  const posts = items.filter((item) => item.kind === "POST");
+  const comments = items.filter((item) => item.kind === "COMMENT");
 
-  document.getElementById('postCount').textContent = posts.length;
-  document.getElementById('commentCount').textContent = comments.length;
-  document.getElementById('savedCount').textContent = items.length;
-  document.getElementById('scanTime').textContent = meta?.scannedAt
-    ? new Date(meta.scannedAt).toLocaleString('vi-VN')
-    : '';
+  document.getElementById("postCount").textContent = posts.length;
+  document.getElementById("commentCount").textContent = comments.length;
+  document.getElementById("savedCount").textContent = items.length;
+  document.getElementById("scanTime").textContent = meta?.scannedAt
+    ? new Date(meta.scannedAt).toLocaleString("vi-VN")
+    : "";
 
   if (!items.length) {
     previewNode.innerHTML = '<div class="empty">Chưa có dữ liệu.</div>';
@@ -206,16 +206,16 @@ function render(items, meta) {
           <div class="item-top">
             ${
               item.authorUrl
-                ? `<a class="author-link" href="${escapeHtml(item.authorUrl)}" target="_blank" title="Mở trang cá nhân">${escapeHtml(item.authorName || 'Mở trang cá nhân')}</a>`
-                : `<strong>${escapeHtml(item.authorName || 'Không rõ tác giả')}</strong>`
+                ? `<a class="author-link" href="${escapeHtml(item.authorUrl)}" target="_blank" title="Mở trang cá nhân">${escapeHtml(item.authorName || "Mở trang cá nhân")}</a>`
+                : `<strong>${escapeHtml(item.authorName || "Không rõ tác giả")}</strong>`
             }
-            <span class="tag">${item.kind === 'POST' ? 'Bài viết' : 'Bình luận'}</span>
+            <span class="tag">${item.kind === "POST" ? "Bài viết" : "Bình luận"}</span>
           </div>
-          <p>${escapeHtml(item.text || '(Không có nội dung chữ)')}</p>
+          <p>${escapeHtml(item.text || "(Không có nội dung chữ)")}</p>
         </article>
       `,
     )
-    .join('');
+    .join("");
 }
 
 async function analyzeAndRenderLeads(items) {
@@ -231,18 +231,17 @@ async function analyzeAndRenderLeads(items) {
 
 function renderLeadAnalysis(analysis) {
   const summary = analysis.summary;
-  const otherCount =
-    summary.RECOMMENDATION + summary.NEUTRAL + summary.SPAM;
-  document.getElementById('potentialCount').textContent =
+  const otherCount = summary.RECOMMENDATION + summary.NEUTRAL + summary.SPAM;
+  document.getElementById("potentialCount").textContent =
     summary.POTENTIAL_PARENT;
-  document.getElementById('teacherAdCount').textContent = summary.TEACHER_AD;
-  document.getElementById('competitorCount').textContent =
+  document.getElementById("teacherAdCount").textContent = summary.TEACHER_AD;
+  document.getElementById("competitorCount").textContent =
     summary.COMPETITOR_SALE;
-  document.getElementById('neutralCount').textContent = otherCount;
-  document.getElementById('profileCount').textContent =
+  document.getElementById("neutralCount").textContent = otherCount;
+  document.getElementById("profileCount").textContent =
     `${summary.totalProfiles} hồ sơ`;
 
-  const leadPreview = document.getElementById('leadPreview');
+  const leadPreview = document.getElementById("leadPreview");
   if (!analysis.aiCandidates.length) {
     leadPreview.innerHTML =
       '<div class="empty">Chưa tìm thấy lead đủ điểm.</div>';
@@ -260,16 +259,16 @@ function renderLeadAnalysis(analysis) {
           <div class="lead-card-top">
             ${author}
             <span class="lead-score">${
-              profile.leadLevel && profile.leadLevel !== 'NONE'
+              profile.leadLevel && profile.leadLevel !== "NONE"
                 ? `${profile.leadLevel} · `
-                : ''
+                : ""
             }${profile.leadScore}/100</span>
           </div>
-          <p class="lead-reason">${escapeHtml(profile.reasons.join(' · '))}</p>
+          <p class="lead-reason">${escapeHtml(profile.reasons.join(" · "))}</p>
         </article>
       `;
     })
-    .join('');
+    .join("");
 }
 
 async function exportJson() {
@@ -308,12 +307,12 @@ async function exportRawJson() {
 
 async function syncToBackend() {
   setBusy(true);
-  setSyncMessage('Đang đồng bộ dữ liệu lên BE...');
+  setSyncMessage("Đang đồng bộ dữ liệu lên BE...");
 
   try {
     const items = await getStoredItems();
     if (!items.length) {
-      throw new Error('Chưa có dữ liệu local để đồng bộ.');
+      throw new Error("Chưa có dữ liệu local để đồng bộ.");
     }
 
     await saveSyncSettings();
@@ -328,7 +327,11 @@ async function syncToBackend() {
     const localAnalysis =
       data[LEAD_ANALYSIS_KEY] || window.DaoEduLeadFilter.analyze(items);
     const postUrl =
-      meta.postUrl || meta.pageUrl || items[0]?.pageUrl || items[0]?.sourceUrl || '';
+      meta.postUrl ||
+      meta.pageUrl ||
+      items[0]?.pageUrl ||
+      items[0]?.sourceUrl ||
+      "";
     const previousState = data[SYNC_STATE_KEY] || null;
     const scanSessionId = shouldReuseSyncSession(
       previousState,
@@ -338,7 +341,7 @@ async function syncToBackend() {
       ? previousState.scanSessionId
       : crypto.randomUUID();
     const nextState = {
-      status: 'SYNCING',
+      status: "SYNCING",
       scanSessionId,
       itemCount: items.length,
       postUrl,
@@ -350,15 +353,15 @@ async function syncToBackend() {
     const apiBaseUrl =
       normalizeApiBaseUrl(data[API_BASE_URL_KEY]) || DEFAULT_API_BASE_URL;
     const response = await fetch(buildApiUrl(apiBaseUrl), {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...(data[SCANNER_TOKEN_KEY]
-          ? { 'x-dao-edu-scanner-token': data[SCANNER_TOKEN_KEY] }
+          ? { "x-dao-edu-scanner-token": data[SCANNER_TOKEN_KEY] }
           : {}),
       },
       body: JSON.stringify({
-        source: 'DAO_EDU_FACEBOOK_EXTENSION',
+        source: "DAO_EDU_FACEBOOK_EXTENSION",
         scanSessionId,
         exportedAt: new Date().toISOString(),
         meta: {
@@ -378,11 +381,15 @@ async function syncToBackend() {
       );
     }
 
-    await chrome.storage.local.remove([STORAGE_KEY, META_KEY, LEAD_ANALYSIS_KEY]);
+    await chrome.storage.local.remove([
+      STORAGE_KEY,
+      META_KEY,
+      LEAD_ANALYSIS_KEY,
+    ]);
     const syncedState = {
-      status: 'SYNCED',
+      status: "SYNCED",
       scanSessionId,
-      scanId: result.scanId || '',
+      scanId: result.scanId || "",
       itemCount: items.length,
       acceptedItems: Number(result.acceptedItems || 0),
       duplicateItems: Number(result.duplicateItems || 0),
@@ -397,11 +404,11 @@ async function syncToBackend() {
       `Đã đồng bộ ${items.length} item lên BE. Local raw đã được xóa để tránh nhiễu.`,
     );
   } catch (error) {
-    const message = error.message || 'Không thể đồng bộ BE.';
+    const message = error.message || "Không thể đồng bộ BE.";
     const data = await chrome.storage.local.get(SYNC_STATE_KEY);
     const failedState = {
       ...(data[SYNC_STATE_KEY] || {}),
-      status: 'FAILED',
+      status: "FAILED",
       lastError: message,
       lastAttemptAt: new Date().toISOString(),
     };
@@ -429,10 +436,14 @@ async function reconcileSyncState(items, meta) {
   const data = await chrome.storage.local.get(SYNC_STATE_KEY);
   const state = data[SYNC_STATE_KEY] || null;
   const postUrl =
-    meta?.postUrl || meta?.pageUrl || items[0]?.pageUrl || items[0]?.sourceUrl || '';
+    meta?.postUrl ||
+    meta?.pageUrl ||
+    items[0]?.pageUrl ||
+    items[0]?.sourceUrl ||
+    "";
   const itemCount = items.length;
   if (
-    (state?.status === 'FAILED' || state?.status === 'SYNCING') &&
+    (state?.status === "FAILED" || state?.status === "SYNCING") &&
     shouldReuseSyncSession(state, itemCount, postUrl)
   ) {
     renderSyncState(state);
@@ -440,16 +451,16 @@ async function reconcileSyncState(items, meta) {
   }
 
   const alreadySynced =
-    state?.status === 'SYNCED' &&
+    state?.status === "SYNCED" &&
     Number(state.itemCount || 0) === itemCount &&
-    String(state.postUrl || '') === String(postUrl || '');
+    String(state.postUrl || "") === String(postUrl || "");
   if (alreadySynced) {
     renderSyncState(state);
     return;
   }
 
   const pendingState = {
-    status: 'PENDING',
+    status: "PENDING",
     itemCount,
     postUrl,
     updatedAt: new Date().toISOString(),
@@ -461,8 +472,8 @@ async function reconcileSyncState(items, meta) {
 async function saveSyncSettings() {
   const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput.value);
   if (!apiBaseUrl) {
-    setSyncMessage('API URL không hợp lệ.', true);
-    throw new Error('API URL không hợp lệ.');
+    setSyncMessage("API URL không hợp lệ.", true);
+    throw new Error("API URL không hợp lệ.");
   }
   await chrome.storage.local.set({
     [API_BASE_URL_KEY]: apiBaseUrl,
@@ -472,64 +483,64 @@ async function saveSyncSettings() {
 }
 
 function renderSyncState(state) {
-  syncMessageNode.classList.remove('error');
+  syncMessageNode.classList.remove("error");
   if (!state) {
-    syncStateNode.textContent = 'Chưa đồng bộ';
+    syncStateNode.textContent = "Chưa đồng bộ";
     syncMessageNode.textContent = `BE: ${apiBaseUrlInput.value || DEFAULT_API_BASE_URL}`;
     return;
   }
 
-  if (state.status === 'SYNCED') {
-    syncStateNode.textContent = 'Đã đồng bộ';
+  if (state.status === "SYNCED") {
+    syncStateNode.textContent = "Đã đồng bộ";
     syncMessageNode.textContent = `Scan ${state.scanId || state.scanSessionId} · ${
       state.itemCount || 0
     } item · ${formatSyncTime(state.syncedAt)}`;
     return;
   }
 
-  if (state.status === 'FAILED') {
-    syncStateNode.textContent = 'Lỗi sync';
+  if (state.status === "FAILED") {
+    syncStateNode.textContent = "Lỗi sync";
     setSyncMessage(
-      `${state.lastError || 'Đồng bộ thất bại.'} Dữ liệu local vẫn được giữ để retry.`,
+      `${state.lastError || "Đồng bộ thất bại."} Dữ liệu local vẫn được giữ để retry.`,
       true,
     );
     return;
   }
 
-  if (state.status === 'PENDING') {
-    syncStateNode.textContent = 'Chưa sync';
+  if (state.status === "PENDING") {
+    syncStateNode.textContent = "Chưa sync";
     syncMessageNode.textContent = `${state.itemCount || 0} item local đang chờ đồng bộ BE.`;
     return;
   }
 
-  if (state.status === 'SYNCING') {
-    syncStateNode.textContent = 'Đang sync';
+  if (state.status === "SYNCING") {
+    syncStateNode.textContent = "Đang sync";
     syncMessageNode.textContent = `Đang gửi ${state.itemCount || 0} item lên BE...`;
     return;
   }
 
-  syncStateNode.textContent = 'Chưa đồng bộ';
-  syncMessageNode.textContent = '';
+  syncStateNode.textContent = "Chưa đồng bộ";
+  syncMessageNode.textContent = "";
 }
 
 function setSyncMessage(message, isError = false) {
   syncMessageNode.textContent = message;
-  syncMessageNode.classList.toggle('error', isError);
+  syncMessageNode.classList.toggle("error", isError);
 }
 
 function shouldReuseSyncSession(state, itemCount, postUrl) {
   return (
     state &&
-    ['FAILED', 'SYNCING'].includes(state.status) &&
+    ["FAILED", "SYNCING"].includes(state.status) &&
     state.scanSessionId &&
     Number(state.itemCount || 0) === itemCount &&
-    String(state.postUrl || '') === String(postUrl || '')
+    String(state.postUrl || "") === String(postUrl || "")
   );
 }
 
 async function readSyncResponse(response) {
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) return response.json();
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return response.json();
   const message = await response.text();
   return { message };
 }
@@ -538,21 +549,27 @@ function normalizeApiBaseUrl(value) {
   const input = String(value || DEFAULT_API_BASE_URL).trim();
   try {
     const url = new URL(input);
-    url.hash = '';
-    url.search = '';
-    const normalized = url.toString().replace(/\/+$/, '');
-    return normalized.endsWith(SYNC_ENDPOINT)
-      ? normalized.slice(0, -SYNC_ENDPOINT.length)
-      : normalized;
+    url.hash = "";
+    url.search = "";
+    let normalized = url.toString().replace(/\/+$/, "");
+    if (normalized.endsWith(SYNC_ENDPOINT)) {
+      normalized = normalized.slice(0, -SYNC_ENDPOINT.length);
+    }
+    const baseUrl = new URL(normalized);
+    if (baseUrl.pathname === "/") {
+      baseUrl.pathname = "/api";
+      normalized = baseUrl.toString().replace(/\/+$/, "");
+    }
+    return normalized;
   } catch {
-    return '';
+    return "";
   }
 }
 
 function normalizeSyncEndpoint(value) {
-  const endpoint = String(value || '/facebook-lead-scans').trim();
-  const withLeadingSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  return withLeadingSlash.replace(/\/+$/, '') || '/facebook-lead-scans';
+  const endpoint = String(value || "/facebook-lead-scans").trim();
+  const withLeadingSlash = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  return withLeadingSlash.replace(/\/+$/, "") || "/facebook-lead-scans";
 }
 
 function buildApiUrl(apiBaseUrl) {
@@ -560,7 +577,7 @@ function buildApiUrl(apiBaseUrl) {
 }
 
 function formatSyncTime(value) {
-  return value ? new Date(value).toLocaleString('vi-VN') : '';
+  return value ? new Date(value).toLocaleString("vi-VN") : "";
 }
 
 function buildRawPostTree(items) {
@@ -570,8 +587,8 @@ function buildRawPostTree(items) {
     const key = item.postId || item.pageUrl || item.sourceUrl;
     if (!key) continue;
     const group = groups.get(key) || { post: null, comments: [] };
-    if (item.kind === 'POST') group.post = item;
-    else if (item.kind === 'COMMENT') group.comments.push(item);
+    if (item.kind === "POST") group.post = item;
+    else if (item.kind === "COMMENT") group.comments.push(item);
     groups.set(key, group);
   }
 
@@ -605,35 +622,35 @@ function buildRawPostTree(items) {
       };
     })
     .sort((a, b) =>
-      String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')),
+      String(b.capturedAt || "").localeCompare(String(a.capturedAt || "")),
     );
 }
 
 function createMissingPost(comment) {
   return {
-    kind: 'POST',
-    postId: comment?.postId || '',
-    groupUrl: comment?.groupUrl || '',
-    pageUrl: comment?.pageUrl || '',
-    sourceUrl: comment?.pageUrl || '',
-    authorName: '',
-    authorUrl: '',
-    text: '',
-    capturedAt: comment?.capturedAt || '',
+    kind: "POST",
+    postId: comment?.postId || "",
+    groupUrl: comment?.groupUrl || "",
+    pageUrl: comment?.pageUrl || "",
+    sourceUrl: comment?.pageUrl || "",
+    authorName: "",
+    authorUrl: "",
+    text: "",
+    capturedAt: comment?.capturedAt || "",
     missingPostContent: true,
   };
 }
 
 function sortCommentTree(comments) {
   comments.sort((a, b) =>
-    String(a.capturedAt || '').localeCompare(String(b.capturedAt || '')),
+    String(a.capturedAt || "").localeCompare(String(b.capturedAt || "")),
   );
   for (const comment of comments) sortCommentTree(comment.replies);
 }
 
 async function downloadJson(payload, filename) {
   const url = URL.createObjectURL(
-    new Blob([payload], { type: 'application/json' }),
+    new Blob([payload], { type: "application/json" }),
   );
   await chrome.downloads.download({ url, filename, saveAs: true });
   window.setTimeout(() => URL.revokeObjectURL(url), 3000);
@@ -649,12 +666,12 @@ async function clearStorage() {
   render([], null);
   renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
   renderSyncState(null);
-  setStatus('Đã xóa dữ liệu lưu tạm.');
+  setStatus("Đã xóa dữ liệu lưu tạm.");
 }
 
 async function clearAllCache() {
   const confirmed = window.confirm(
-    'Xóa toàn bộ dữ liệu, lịch sử bài đã quét và trạng thái quét?',
+    "Xóa toàn bộ dữ liệu, lịch sử bài đã quét và trạng thái quét?",
   );
   if (!confirmed) return;
 
@@ -666,13 +683,13 @@ async function clearAllCache() {
     render([], null);
     renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
 
-    const panel = document.getElementById('batchPanel');
-    const progress = document.getElementById('batchProgress');
-    panel.classList.add('hidden');
-    progress.style.width = '0%';
-    continueBatchButton.classList.add('hidden');
+    const panel = document.getElementById("batchPanel");
+    const progress = document.getElementById("batchProgress");
+    panel.classList.add("hidden");
+    progress.style.width = "0%";
+    continueBatchButton.classList.add("hidden");
     await loadSyncSettings();
-    setStatus('Đã xóa toàn bộ cache. Có thể quét lại từ đầu.');
+    setStatus("Đã xóa toàn bộ cache. Có thể quét lại từ đầu.");
   } finally {
     setBusy(false);
     clearAllButton.disabled = false;
@@ -694,16 +711,16 @@ function setBusy(busy) {
 
 function setStatus(message, isError = false) {
   statusNode.textContent = message;
-  statusNode.classList.toggle('error', isError);
+  statusNode.classList.toggle("error", isError);
 }
 
 function escapeHtml(value) {
   return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function sleep(milliseconds) {
@@ -713,11 +730,9 @@ function sleep(milliseconds) {
 function isFacebookUrl(value) {
   try {
     const hostname = new URL(value).hostname;
-    return [
-      'www.facebook.com',
-      'web.facebook.com',
-      'm.facebook.com',
-    ].includes(hostname);
+    return ["www.facebook.com", "web.facebook.com", "m.facebook.com"].includes(
+      hostname,
+    );
   } catch {
     return false;
   }
@@ -726,7 +741,7 @@ function isFacebookUrl(value) {
 async function ensureContentScript(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
-      type: 'PING_SCANNER',
+      type: "PING_SCANNER",
     });
     if (response?.ok) return;
   } catch {
@@ -735,34 +750,35 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ['batch-queue.js', 'content.js'],
+    files: ["batch-queue.js", "content.js"],
   });
   await sleep(150);
 }
 
 function normalizeInputPostUrl(value) {
-  const input = String(value || '').trim();
-  if (!input) return '';
+  const input = String(value || "").trim();
+  if (!input) return "";
   try {
     const url = new URL(input);
     const allowedHost = [
-      'www.facebook.com',
-      'web.facebook.com',
-      'm.facebook.com',
-      'facebook.com',
+      "www.facebook.com",
+      "web.facebook.com",
+      "m.facebook.com",
+      "facebook.com",
     ].includes(url.hostname);
-    const isGroupPost =
-      /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(url.pathname);
+    const isGroupPost = /\/groups\/[^/?#]+\/(?:posts|permalink)\/[^/?#]+/.test(
+      url.pathname,
+    );
     const isSharePost = /^\/share\/p\/[^/]+\/?$/.test(url.pathname);
     if (!allowedHost || (!isGroupPost && !isSharePost)) {
-      return '';
+      return "";
     }
-    url.hostname = 'www.facebook.com';
-    url.hash = '';
-    if (isGroupPost) url.search = '';
+    url.hostname = "www.facebook.com";
+    url.hash = "";
+    if (isGroupPost) url.search = "";
     return url.toString();
   } catch {
-    return '';
+    return "";
   }
 }
 
@@ -773,7 +789,7 @@ async function waitForTabComplete(tabId, expectedUrl) {
     const tab = await chrome.tabs.get(tabId);
     const actualIdentity = getPostIdentity(tab.url);
     if (
-      tab.status === 'complete' &&
+      tab.status === "complete" &&
       actualIdentity &&
       (!expectedIdentity || actualIdentity === expectedIdentity)
     ) {
@@ -782,38 +798,41 @@ async function waitForTabComplete(tabId, expectedUrl) {
     }
     await sleep(250);
   }
-  throw new Error('Facebook tải bài viết quá lâu. Hãy thử lại.');
+  throw new Error("Facebook tải bài viết quá lâu. Hãy thử lại.");
 }
 
 function getPostIdentity(value) {
   try {
     const match = new URL(value).pathname.match(
-      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+      /\/groups\/([^/?#]+)\/(?:posts|permalink)\/([^/?#]+)/,
     );
-    return match ? `${match[1]}:${match[2]}` : '';
+    return match ? `${match[1]}:${match[2]}` : "";
   } catch {
-    return '';
+    return "";
   }
 }
 
 async function startBatch(continueBatch) {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
     if (!tab?.id || !isFacebookUrl(tab.url)) {
-      throw new Error('Hãy mở trang nhóm Facebook trước.');
+      throw new Error("Hãy mở trang nhóm Facebook trước.");
     }
 
     const response = await chrome.runtime.sendMessage({
-      type: 'START_BATCH_SCAN',
+      type: "START_BATCH_SCAN",
       sourceTabId: tab.id,
       continueBatch,
     });
     if (!response?.ok) {
-      throw new Error(response?.error || 'Không thể bắt đầu quét hàng loạt.');
+      throw new Error(response?.error || "Không thể bắt đầu quét hàng loạt.");
     }
     await loadBatchState();
   } catch (error) {
-    setStatus(error.message || 'Không thể quét hàng loạt.', true);
+    setStatus(error.message || "Không thể quét hàng loạt.", true);
   }
 }
 
@@ -821,16 +840,16 @@ async function stopBatchScan(showStatus) {
   stopBatchButton.disabled = true;
   try {
     const response = await chrome.runtime.sendMessage({
-      type: 'STOP_BATCH_SCAN',
+      type: "STOP_BATCH_SCAN",
     });
     if (!response?.ok) {
-      throw new Error(response?.error || 'Không thể dừng job nền.');
+      throw new Error(response?.error || "Không thể dừng job nền.");
     }
     await loadBatchState();
-    if (showStatus) setStatus('Đã dừng và xóa job nền.');
+    if (showStatus) setStatus("Đã dừng và xóa job nền.");
   } catch (error) {
     if (showStatus) {
-      setStatus(error.message || 'Không thể dừng job nền.', true);
+      setStatus(error.message || "Không thể dừng job nền.", true);
     }
   } finally {
     stopBatchButton.disabled = false;
@@ -839,42 +858,40 @@ async function stopBatchScan(showStatus) {
 
 async function loadBatchState() {
   const response = await chrome.runtime.sendMessage({
-    type: 'GET_BATCH_STATE',
+    type: "GET_BATCH_STATE",
   });
   if (!response?.ok) return;
 
   const state = response.state;
-  const panel = document.getElementById('batchPanel');
-  const status = document.getElementById('batchStatus');
-  const message = document.getElementById('batchMessage');
-  const progress = document.getElementById('batchProgress');
-  const visible = state.status !== 'IDLE';
+  const panel = document.getElementById("batchPanel");
+  const status = document.getElementById("batchStatus");
+  const message = document.getElementById("batchMessage");
+  const progress = document.getElementById("batchProgress");
+  const visible = state.status !== "IDLE";
 
-  panel.classList.toggle('hidden', !visible);
+  panel.classList.toggle("hidden", !visible);
   status.textContent =
-    state.status === 'RUNNING'
+    state.status === "RUNNING"
       ? `${state.current}/${state.batchTotal}`
-      : state.status === 'AWAITING_CONTINUE'
-        ? 'Chờ tiếp tục'
-        : state.status === 'CANCELLED'
-          ? 'Đã dừng'
-          : state.status === 'ERROR'
-            ? 'Lỗi'
-            : 'Hoàn tất';
-  message.textContent = state.message || '';
+      : state.status === "AWAITING_CONTINUE"
+        ? "Chờ tiếp tục"
+        : state.status === "CANCELLED"
+          ? "Đã dừng"
+          : state.status === "ERROR"
+            ? "Lỗi"
+            : "Hoàn tất";
+  message.textContent = state.message || "";
   progress.style.width = `${
-    state.batchTotal
-      ? Math.round((state.current / state.batchTotal) * 100)
-      : 0
+    state.batchTotal ? Math.round((state.current / state.batchTotal) * 100) : 0
   }%`;
 
-  const running = state.status === 'RUNNING';
+  const running = state.status === "RUNNING";
   batchButton.disabled = running;
   continueBatchButton.disabled = running;
-  stopBatchButton.classList.toggle('hidden', !running);
+  stopBatchButton.classList.toggle("hidden", !running);
   continueBatchButton.classList.toggle(
-    'hidden',
-    state.status !== 'AWAITING_CONTINUE',
+    "hidden",
+    state.status !== "AWAITING_CONTINUE",
   );
 
   if (!running) await loadStoredData();
@@ -884,14 +901,14 @@ function normalizePostUrl(value) {
   try {
     const url = new URL(value);
     const match = url.pathname.match(
-      /\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)/,
+      /\/groups\/([^/?#]+)\/(?:posts|permalink)\/([^/?#]+)/,
     );
     if (match) {
-      url.hostname = 'www.facebook.com';
+      url.hostname = "www.facebook.com";
       url.pathname = `/groups/${match[1]}/posts/${match[2]}/`;
     }
-    url.search = '';
-    url.hash = '';
+    url.search = "";
+    url.hash = "";
     return url.toString();
   } catch {
     return value;
