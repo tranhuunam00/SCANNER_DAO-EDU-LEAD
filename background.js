@@ -346,3 +346,32 @@ function normalizePostUrl(value) {
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'FETCH_SCANNED_POST_IDS') {
+    const groupUrl = message.groupUrl;
+    if (!groupUrl) {
+      sendResponse({ ok: false, error: 'groupUrl is required' });
+      return true;
+    }
+
+    chrome.storage.local.get(['daoEduLeadScannerApiBaseUrl', 'daoEduLeadScannerToken']).then(async (data) => {
+      const apiBaseUrl = (data.daoEduLeadScannerApiBaseUrl || 'http://103.90.227.173:5000/api').replace(/\/+$/, '');
+      const token = data.daoEduLeadScannerToken || '';
+      
+      try {
+        const url = `${apiBaseUrl}/facebook-lead-scans/sync/scanned-posts?groupUrl=${encodeURIComponent(groupUrl)}`;
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['x-dao-edu-scanner-token'] = token;
+
+        const res = await fetch(url, { headers });
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        const result = await res.json();
+        sendResponse({ ok: true, postIds: result.postIds || [] });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    });
+
+    return true;
+  }
+});

@@ -2250,4 +2250,34 @@ function hash(value) {
   return `fnv1a-${(result >>> 0).toString(16)}`;
 }
 
+let lastSyncedGroupUrl = '';
+
+async function syncBackendScannedPosts() {
+  const isGroup = location.pathname.startsWith('/groups/');
+  const groupUrl = isGroup ? location.origin + location.pathname.split('/').slice(0, 3).join('/') + '/' : '';
+  
+  if (!groupUrl || groupUrl === lastSyncedGroupUrl) return;
+  lastSyncedGroupUrl = groupUrl;
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'FETCH_SCANNED_POST_IDS',
+      groupUrl,
+    });
+    if (res?.ok && Array.isArray(res.postIds)) {
+      const scanned = await getScannedUrlSet();
+      res.postIds.forEach(id => {
+        if (id) scanned.add(normalizePostUrl(`${groupUrl}posts/${id}/`));
+      });
+      await chrome.storage.local.set({ [SCANNED_POSTS_KEY]: [...scanned] });
+      applyScannedMarkers(scanned);
+    }
+  } catch (e) {
+    // Ignore message port errors
+  }
+}
+
+setInterval(syncBackendScannedPosts, 3000);
+setTimeout(syncBackendScannedPosts, 1000);
+
 })();
