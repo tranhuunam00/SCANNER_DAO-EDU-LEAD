@@ -149,6 +149,8 @@ function ScanActions() {
   const batchState = useStore(s => s.batchState);
   const scannedPostUrls = useStore(s => s.scannedPostUrls);
   const batchAttemptedPostUrls = useStore(s => s.batchAttemptedPostUrls);
+  const items = useStore(s => s.items);
+  const rescanFailedPosts = useStore(s => s.rescanFailedPosts);
   const postUrlRef = React.useRef(null);
 
   const isRunning = batchState.status === 'RUNNING';
@@ -162,6 +164,24 @@ function ScanActions() {
   const updateConfig = (key, val) => {
     const next = { ...batchConfig, [key]: val };
     saveBatchConfig(next);
+  };
+
+  const getCommentCountForPost = (url) => {
+    const id = getPostId(url);
+    if (!id) return 0;
+    if (Array.isArray(items) && items.length > 0) {
+      const count = items.filter(
+        item => item.kind === 'COMMENT' && getPostId(item.pageUrl) === id
+      ).length;
+      if (count > 0) return count;
+    }
+    if (batchState && Array.isArray(batchState.history)) {
+      const match = batchState.history.find(h => getPostId(h.postUrl) === id);
+      if (match && match.status === 'SUCCESS') {
+        return Number(match.comments) || 0;
+      }
+    }
+    return 0;
   };
 
   return (
@@ -202,45 +222,148 @@ function ScanActions() {
           <summary style={{ cursor: 'pointer', fontWeight: 'bold', color: '#475569', outline: 'none' }}>
             📋 Chi tiết hàng chờ bỏ qua bài viết ({scannedPostUrls.length + batchAttemptedPostUrls.length} bài)
           </summary>
-          <div style={{ marginTop: '8px', maxHeight: '180px', overflowY: 'auto' }}>
-            <div style={{ marginBottom: '8px' }}>
-              <strong style={{ color: '#1e293b' }}>1. Đã quét thành công ({scannedPostUrls.length}):</strong>
+          <div style={{ marginTop: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+            
+            {/* SECTION 1: Đã quét thành công */}
+            <div style={{ marginBottom: '12px' }}>
+              <strong style={{ color: '#1e293b', display: 'block', marginBottom: '4px' }}>1. Đã quét thành công ({scannedPostUrls.length}):</strong>
               {scannedPostUrls.length === 0 ? (
                 <div style={{ color: '#94a3b8', paddingLeft: '8px', marginTop: '2px' }}>Trống.</div>
               ) : (
-                <ul style={{ margin: '4px 0', paddingLeft: '16px', listStyleType: 'disc', color: '#475569' }}>
-                  {scannedPostUrls.map((url, i) => {
-                    const id = getPostId(url);
-                    const statusText = batchConfig.ignoreScanned ? "Bỏ qua (Tránh quét trùng)" : "Sẽ quét lại";
-                    const statusColor = batchConfig.ignoreScanned ? "#ef4444" : "#2563eb";
-                    return (
-                      <li key={i} style={{ marginBottom: '2px', wordBreak: 'break-all' }} title={url}>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{id}</span> -{' '}
-                        <span style={{ color: statusColor, fontWeight: 'bold' }}>{statusText}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '4px', fontSize: '10px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569', textAlign: 'left' }}>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold' }}>ID Bài Viết</th>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '50px', textAlign: 'center' }}>Comments</th>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '90px', textAlign: 'right' }}>Trạng Thái</th>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '70px', textAlign: 'right' }}>Hành Động</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scannedPostUrls.map((url, i) => {
+                      const id = getPostId(url);
+                      const commentCount = getCommentCountForPost(url);
+                      const statusText = batchConfig.ignoreScanned ? "Bỏ qua" : "Sẽ quét lại";
+                      const statusColor = batchConfig.ignoreScanned ? "#ef4444" : "#2563eb";
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }} title={url}>
+                          <td style={{ padding: '4px 2px', fontFamily: 'monospace', fontWeight: 'bold', color: '#1e293b' }}>{id}</td>
+                          <td style={{ padding: '4px 2px', textAlign: 'center', fontWeight: 'bold', color: '#0f172a' }}>{commentCount}</td>
+                          <td style={{ padding: '4px 2px', textAlign: 'right', color: statusColor, fontWeight: 'bold' }}>{statusText}</td>
+                          <td style={{ padding: '4px 2px', textAlign: 'right' }}>
+                            <button
+                              disabled={busy}
+                              onClick={() => scanSinglePost(url)}
+                              style={{
+                                padding: '2px 5px',
+                                fontSize: '9px',
+                                background: '#3b82f6',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                                minHeight: 'auto',
+                              }}
+                            >
+                              Quét lại
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
+
+            {/* SECTION 2: Đã quét/thử quét trong lượt chạy này */}
             <div>
-              <strong style={{ color: '#1e293b' }}>2. Đã quét/thử quét trong lượt chạy này ({batchAttemptedPostUrls.length}):</strong>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <strong style={{ color: '#1e293b' }}>2. Đã quét/thử quét trong lượt chạy này ({batchAttemptedPostUrls.length}):</strong>
+                {batchAttemptedPostUrls.length > 0 && (
+                  <button
+                    onClick={rescanFailedPosts}
+                    style={{
+                      padding: '2px 6px',
+                      fontSize: '9px',
+                      background: '#ef4444',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                      fontWeight: 'bold',
+                      minHeight: 'auto',
+                    }}
+                  >
+                    🔄 Quét lại bài lỗi
+                  </button>
+                )}
+              </div>
               {batchAttemptedPostUrls.length === 0 ? (
                 <div style={{ color: '#94a3b8', paddingLeft: '8px', marginTop: '2px' }}>Trống (Sẽ làm mới khi chạy batch mới).</div>
               ) : (
-                <ul style={{ margin: '4px 0', paddingLeft: '16px', listStyleType: 'disc', color: '#475569' }}>
-                  {batchAttemptedPostUrls.map((url, i) => {
-                    const id = getPostId(url);
-                    const isSuccess = scannedPostUrls.some(su => getPostId(su) === id);
-                    const statusText = isSuccess ? "Thành công (Bỏ qua)" : "Quét lỗi/Đang thử (Bỏ qua)";
-                    return (
-                      <li key={i} style={{ marginBottom: '2px', wordBreak: 'break-all' }} title={url}>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{id}</span> -{' '}
-                        <span style={{ color: '#dc2626', fontWeight: 'bold' }}>{statusText}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '4px', fontSize: '10px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569', textAlign: 'left' }}>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold' }}>ID Bài Viết</th>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '50px', textAlign: 'center' }}>Comments</th>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '90px', textAlign: 'right' }}>Trạng Thái</th>
+                      <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '70px', textAlign: 'right' }}>Hành Động</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {batchAttemptedPostUrls.map((url, i) => {
+                      const id = getPostId(url);
+                      
+                      let statusText = "Bỏ qua";
+                      let commentCount = 0;
+                      let statusColor = "#dc2626";
+                      
+                      if (batchState && Array.isArray(batchState.history)) {
+                        const match = batchState.history.find(h => getPostId(h.postUrl) === id);
+                        if (match) {
+                          if (match.status === 'SUCCESS') {
+                            statusText = "Thành công";
+                            commentCount = Number(match.comments) || 0;
+                            statusColor = "#16a34a";
+                          } else {
+                            statusText = "Thất bại";
+                            commentCount = 0;
+                            statusColor = "#dc2626";
+                          }
+                        }
+                      }
+                      
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }} title={url}>
+                          <td style={{ padding: '4px 2px', fontFamily: 'monospace', fontWeight: 'bold', color: '#1e293b' }}>{id}</td>
+                          <td style={{ padding: '4px 2px', textAlign: 'center', fontWeight: 'bold', color: '#0f172a' }}>{commentCount}</td>
+                          <td style={{ padding: '4px 2px', textAlign: 'right', color: statusColor, fontWeight: 'bold' }}>{statusText}</td>
+                          <td style={{ padding: '4px 2px', textAlign: 'right' }}>
+                            <button
+                              disabled={busy}
+                              onClick={() => scanSinglePost(url)}
+                              style={{
+                                padding: '2px 5px',
+                                fontSize: '9px',
+                                background: '#3b82f6',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                                minHeight: 'auto',
+                              }}
+                            >
+                              Quét lại
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
           </div>

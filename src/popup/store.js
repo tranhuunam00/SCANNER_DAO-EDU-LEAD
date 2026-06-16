@@ -347,6 +347,45 @@ export const useStore = create((set, get) => ({
       set({ syncMessage: `Thất bại: ${e.message}`, syncError: true });
     }
   },
+
+  rescanFailedPosts: async () => {
+    const { batchAttemptedPostUrls, scannedPostUrls } = get();
+    
+    const getPostIdLocal = (url) => {
+      try {
+        const u = new URL(url);
+        const m = u.pathname.match(/\/posts\/([^/]+)/) || u.pathname.match(/\/permalink\/([^/]+)/);
+        if (m) return m[1];
+        const parts = u.pathname.split('/').filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : url;
+      } catch {
+        const m = String(url).match(/\/posts\/([^/?#]+)/) || String(url).match(/\/permalink\/([^/?#]+)/);
+        return m ? m[1] : String(url).split('/').filter(Boolean).pop() || url;
+      }
+    };
+    
+    const scannedIds = new Set(scannedPostUrls.map(u => getPostIdLocal(u)));
+    const failedUrls = batchAttemptedPostUrls.filter(url => !scannedIds.has(getPostIdLocal(url)));
+    
+    if (failedUrls.length === 0) {
+      set({ statusMsg: 'Không có bài viết nào bị lỗi để quét lại.', statusError: false });
+      return;
+    }
+    
+    // Remove failed URLs from the attempted list in local storage
+    const nextAttempted = batchAttemptedPostUrls.filter(url => !failedUrls.includes(url));
+    await chrome.storage.local.set({ [BATCH_ATTEMPTED_URLS_KEY]: nextAttempted });
+    
+    // Also remove them from batchState.history
+    const data = await chrome.storage.local.get(BATCH_STATE_KEY);
+    const batchState = data[BATCH_STATE_KEY] || {};
+    if (Array.isArray(batchState.history)) {
+      batchState.history = batchState.history.filter(h => !failedUrls.some(fu => getPostIdLocal(fu) === getPostIdLocal(h.postUrl)));
+      await chrome.storage.local.set({ [BATCH_STATE_KEY]: batchState });
+    }
+    
+    set({ statusMsg: `Đã đưa ${failedUrls.length} bài viết lỗi trở lại hàng chờ. Hãy nhấn 'Quét tiếp phần còn lại' để chạy.`, statusError: false });
+  },
 }));
 
 // Reactive: lắng nghe chrome.storage.onChanged để cập nhật React tự động
