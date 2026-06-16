@@ -296,8 +296,8 @@ export const useStore = create((set, get) => ({
       const successMsg = `Thành công! Đã đồng bộ ${data.data?.itemCount || 0} mục lên BE.`;
       set({ items: [], meta: null, syncState: 'Đã đồng bộ', syncMessage: successMsg, syncError: false });
       addLog(successMsg);
-      // pull scanned from BE
-      get().pullTemFromBackend();
+      // pull scanned from BE (silent if not on a Facebook tab)
+      get().pullTemFromBackend(true);
     } catch (e) {
       const errMsg = `Đồng bộ thất bại: ${e.message}`;
       set({ syncMessage: errMsg, syncError: true });
@@ -305,7 +305,7 @@ export const useStore = create((set, get) => ({
     }
   },
 
-  pullTemFromBackend: async () => {
+  pullTemFromBackend: async (silentIfNoTab = false) => {
     const { items, addLog } = get();
     if (items.length > 0) {
       const ok = window.confirm(
@@ -316,11 +316,24 @@ export const useStore = create((set, get) => ({
         return;
       }
     }
-    addLog('Bắt đầu xóa cache và tải lại dữ liệu từ BE...');
-    set({ syncMessage: 'Đang xóa cache và tải lại từ BE...', syncError: false });
+    
+    if (silentIfNoTab) {
+      addLog('Đang đồng bộ lại danh sách bài viết đã quét từ BE...');
+    } else {
+      addLog('Bắt đầu xóa cache và tải lại dữ liệu từ BE...');
+      set({ syncMessage: 'Đang xóa cache và tải lại từ BE...', syncError: false });
+    }
+    
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new Error('Không tìm thấy tab Facebook đang mở.');
+      if (!tab?.id) {
+        throw new Error('Không tìm thấy tab Facebook đang mở.');
+      }
+
+      const isFb = tab.url && (tab.url.includes('facebook.com') || tab.url.includes('fb.com'));
+      if (!isFb) {
+        throw new Error('Tab hiện tại không phải Facebook. Vui lòng chuyển sang tab Facebook để tải lại dữ liệu.');
+      }
 
       // Bước 1: Xóa TOÀN BỘ cache cục bộ
       await chrome.storage.local.remove([
@@ -344,7 +357,22 @@ export const useStore = create((set, get) => ({
       });
 
       // Bước 2: Kéo lại từ BE
-      const res = await chrome.tabs.sendMessage(tab.id, { type: 'FORCE_SYNC_SCANNED_POSTS' });
+      let res;
+      try {
+        res = await chrome.tabs.sendMessage(tab.id, { type: 'FORCE_SYNC_SCANNED_POSTS' });
+      } catch (err) {
+        addLog('Không kết nối được content script. Đang tự động inject lại...');
+        try {
+          const manifest = chrome.runtime.getManifest();
+          const scripts = manifest.content_scripts?.[0]?.js || ['assets/batch-queue.js', 'assets/content.js'];
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: scripts });
+          await new Promise(resolve => setTimeout(resolve, 500));
+          res = await chrome.tabs.sendMessage(tab.id, { type: 'FORCE_SYNC_SCANNED_POSTS' });
+        } catch (injectErr) {
+          throw new Error('Không thể kết nối tới trang Facebook. Vui lòng tải lại trang (F5) Facebook và thử lại.');
+        }
+      }
+
       if (res?.ok) {
         const msg = `Xóa cache và tải về ${res.count || 0} bài thành công!`;
         set({ syncMessage: msg, syncError: false, syncState: 'Đã đồng bộ' });
@@ -354,9 +382,13 @@ export const useStore = create((set, get) => ({
         throw new Error(res?.error || 'Không tải được tem từ BE.');
       }
     } catch (e) {
-      const errMsg = `Tải lại từ BE thất bại: ${e.message}`;
-      set({ syncMessage: errMsg, syncError: true });
-      addLog(errMsg);
+      if (silentIfNoTab) {
+        addLog(`[Cảnh báo] Không thể đồng bộ lại danh sách bài viết từ BE: ${e.message}`);
+      } else {
+        const errMsg = `Tải lại từ BE thất bại: ${e.message}`;
+        set({ syncMessage: errMsg, syncError: true });
+        addLog(errMsg);
+      }
     }
   },
 
