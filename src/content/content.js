@@ -1,3 +1,11 @@
+import {
+  STORAGE_KEY,
+  META_KEY,
+  SCANNED_URLS_KEY,
+  BATCH_ATTEMPTED_URLS_KEY,
+  BATCH_STATE_KEY,
+} from '../constants';
+
 (function initializeDaoEduLeadScannerContent() {
 if (globalThis.__daoEduLeadScannerContentVersion === 36) return;
 globalThis.__daoEduLeadScannerContentVersion = 36;
@@ -16,12 +24,6 @@ const EXPAND_TEXT_PATTERNS = [
   /^view \d+ replies$/i,
 ];
 
-const STORAGE_KEY = 'daoEduLeadScannerItems';
-const META_KEY = 'daoEduLeadScannerMeta';
-const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
-const BATCH_ATTEMPTED_URLS_KEY =
-  'daoEduLeadScannerBatchAttemptedPostUrls';
-const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
 const CONTENT_SCRIPT_VERSION = 36;
 const DEEP_SCAN_STABLE_PASSES = 4;
 const MAX_STALLED_CLICKS_PER_EXPANDER = 4;

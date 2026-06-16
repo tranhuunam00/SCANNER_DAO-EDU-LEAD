@@ -1,11 +1,18 @@
 import { create } from 'zustand';
-
-const STORAGE_KEY = 'daoEduLeadScannerItems';
-const META_KEY = 'daoEduLeadScannerMeta';
-const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-const BATCH_CONFIG_KEY = 'daoEduLeadScannerBatchConfig';
-const API_URL_KEY = 'daoEduLeadScannerApiBaseUrl';
-const TOKEN_KEY = 'daoEduLeadScannerToken';
+import {
+  STORAGE_KEY,
+  META_KEY,
+  BATCH_STATE_KEY,
+  BATCH_CONFIG_KEY,
+  API_URL_KEY,
+  TOKEN_KEY,
+  SCANNED_URLS_KEY,
+  BATCH_ATTEMPTED_URLS_KEY,
+  LEAD_ANALYSIS_KEY,
+  DEFAULT_API_URL,
+  DEFAULT_POST_TIMEOUT_SEC,
+  DEFAULT_TOTAL_TIMEOUT_MIN,
+} from '../constants';
 
 const DEFAULT_BATCH_STATE = {
   status: 'IDLE',
@@ -21,8 +28,8 @@ export const useStore = create((set, get) => ({
   items: [],
   meta: null,
   batchState: { ...DEFAULT_BATCH_STATE },
-  batchConfig: { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true },
-  apiBaseUrl: 'http://localhost:5000/api',
+  batchConfig: { limit: 10, postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC, totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN, ignoreScanned: true },
+  apiBaseUrl: DEFAULT_API_URL,
   token: '',
   statusMsg: 'Sẵn sàng.',
   statusError: false,
@@ -65,12 +72,12 @@ export const useStore = create((set, get) => ({
         : { ...DEFAULT_BATCH_STATE },
       batchConfig: {
         limit: 10,
-        postTimeoutSec: 120,
-        totalTimeoutMin: 30,
+        postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC,
+        totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN,
         ignoreScanned: true,
         ...(data[BATCH_CONFIG_KEY] || {})
       },
-      apiBaseUrl: data[API_URL_KEY] || 'http://localhost:5000/api',
+      apiBaseUrl: data[API_URL_KEY] || DEFAULT_API_URL,
       token: data[TOKEN_KEY] || '',
     });
     // load batch state from background
@@ -220,10 +227,10 @@ export const useStore = create((set, get) => ({
 
       // Cập nhật danh sách bài đã quét để tránh quét trùng lặp khi chạy hàng loạt (ignoreScanned)
       if (result.summary.postUrl) {
-        const scannedUrlsData = await chrome.storage.local.get('daoEduLeadScannerScannedPostUrls');
-        const scannedUrls = new Set(scannedUrlsData.daoEduLeadScannerScannedPostUrls || []);
+        const scannedUrlsData = await chrome.storage.local.get(SCANNED_URLS_KEY);
+        const scannedUrls = new Set(scannedUrlsData[SCANNED_URLS_KEY] || []);
         scannedUrls.add(result.summary.postUrl);
-        await chrome.storage.local.set({ daoEduLeadScannerScannedPostUrls: [...scannedUrls] });
+        await chrome.storage.local.set({ [SCANNED_URLS_KEY]: [...scannedUrls] });
       }
 
       // Cập nhật hiển thị lịch sử quét trên popup (batchState.history)
@@ -267,7 +274,7 @@ export const useStore = create((set, get) => ({
     }
     set({ syncMessage: 'Đang đồng bộ...', syncError: false });
     try {
-      const base = (apiBaseUrl || 'http://localhost:5000/api').replace(/\/+$/, '');
+      const base = (apiBaseUrl || DEFAULT_API_URL).replace(/\/+$/, '');
       const res = await fetch(`${base}/facebook-lead-scans`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-dao-edu-scanner-token': token },
@@ -298,9 +305,9 @@ export const useStore = create((set, get) => ({
         STORAGE_KEY,
         META_KEY,
         BATCH_STATE_KEY,
-        'daoEduLeadScannerScannedPostUrls',
-        'daoEduLeadScannerBatchAttemptedPostUrls',
-        'daoEduLeadScannerLeadAnalysis',
+        SCANNED_URLS_KEY,
+        BATCH_ATTEMPTED_URLS_KEY,
+        LEAD_ANALYSIS_KEY,
       ]);
 
       // Cập nhật state React về trạng thái sạch
@@ -346,8 +353,8 @@ chrome.storage.onChanged.addListener((changes, ns) => {
   if (changes[BATCH_CONFIG_KEY]) {
     const val = changes[BATCH_CONFIG_KEY].newValue;
     updates.batchConfig = val && typeof val === 'object'
-      ? { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true, ...val }
-      : { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true };
+      ? { limit: 10, postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC, totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN, ignoreScanned: true, ...val }
+      : { limit: 10, postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC, totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN, ignoreScanned: true };
   }
   if (Object.keys(updates).length) useStore.setState(updates);
 });

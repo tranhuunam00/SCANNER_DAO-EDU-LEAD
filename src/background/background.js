@@ -1,6 +1,9 @@
-const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-const BATCH_SIZE = 10;
-const POST_SCAN_TIMEOUT_MS = 45000;
+import {
+  BATCH_STATE_KEY,
+  BATCH_SIZE,
+  API_URL_KEY,
+  TOKEN_KEY,
+} from '../constants';
 const activeScanTabsByJob = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -364,9 +367,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return true;
     }
 
-    chrome.storage.local.get(['daoEduLeadScannerApiBaseUrl', 'daoEduLeadScannerToken']).then(async (data) => {
-      const apiBaseUrl = (data.daoEduLeadScannerApiBaseUrl || 'http://localhost:5000/api').replace(/\/+$/, '');
-      const token = data.daoEduLeadScannerToken || '';
+    chrome.storage.local.get([API_URL_KEY, TOKEN_KEY]).then(async (data) => {
+      const apiBaseUrl = (data[API_URL_KEY] || 'http://localhost:5000/api').replace(/\/+$/, '');
+      const token = data[TOKEN_KEY] || '';
       
       try {
         const headers = { 'Content-Type': 'application/json' };

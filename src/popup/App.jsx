@@ -1,5 +1,16 @@
 import React, { useEffect } from 'react';
 import { useStore } from './store';
+import {
+  STORAGE_KEY,
+  META_KEY,
+  BATCH_STATE_KEY,
+  BATCH_CONFIG_KEY,
+  API_URL_KEY,
+  TOKEN_KEY,
+  SCANNED_URLS_KEY,
+  BATCH_ATTEMPTED_URLS_KEY,
+  LEAD_ANALYSIS_KEY,
+} from '../constants';
 
 function escapeHtml(str) {
   return String(str || '')
@@ -298,15 +309,15 @@ function CacheModal({ onClose }) {
   }, []);
 
   const KEY_MEANINGS = {
-    daoEduLeadScannerItems: 'Danh sách các bài viết và bình luận đã quét thành công',
-    daoEduLeadScannerMeta: 'Siêu dữ liệu của lượt quét gần nhất (số lượng, thời gian)',
-    daoEduLeadScannerBatchState: 'Trạng thái hiện tại và lịch sử của tiến trình quét hàng loạt',
-    daoEduLeadScannerBatchConfig: 'Cấu hình giới hạn bài viết & thời gian quét hàng loạt',
-    daoEduLeadScannerApiBaseUrl: 'Địa chỉ URL cổng kết nối API Backend',
-    daoEduLeadScannerToken: 'Token xác thực quyền gửi dữ liệu lên Backend',
-    daoEduLeadScannerScannedPostUrls: 'Danh sách các URL bài viết đã quét (để loại trừ bài cũ)',
-    daoEduLeadScannerBatchAttemptedPostUrls: 'Danh sách các URL bài viết đã thử quét/lỗi (để loại trừ)',
-    daoEduLeadScannerLeadAnalysis: 'Kết quả phân tích lọc lead tuyển sinh (cục bộ)',
+    [STORAGE_KEY]: 'Danh sách các bài viết và bình luận đã quét thành công',
+    [META_KEY]: 'Siêu dữ liệu của lượt quét gần nhất (số lượng, thời gian)',
+    [BATCH_STATE_KEY]: 'Trạng thái hiện tại và lịch sử của tiến trình quét hàng loạt',
+    [BATCH_CONFIG_KEY]: 'Cấu hình giới hạn bài viết & thời gian quét hàng loạt',
+    [API_URL_KEY]: 'Địa chỉ URL cổng kết nối API Backend',
+    [TOKEN_KEY]: 'Token xác thực quyền gửi dữ liệu lên Backend',
+    [SCANNED_URLS_KEY]: 'Danh sách các URL bài viết đã quét (để loại trừ bài cũ)',
+    [BATCH_ATTEMPTED_URLS_KEY]: 'Danh sách các URL bài viết đã thử quét/lỗi (để loại trừ)',
+    [LEAD_ANALYSIS_KEY]: 'Kết quả phân tích lọc lead tuyển sinh (cục bộ)',
   };
 
   const getMeaning = (key) => KEY_MEANINGS[key] || 'Dữ liệu hệ thống / Khác';
