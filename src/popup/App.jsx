@@ -110,7 +110,7 @@ function HeaderStats() {
     <section className="stats">
       <article><strong id="postCount">{postCount}</strong><span>Bài viết</span></article>
       <article><strong id="commentCount">{commentCount}</strong><span>Bình luận</span></article>
-      <article><strong id="savedCount">{savedCount}</strong><span>Đã lưu</span></article>
+      <article><strong id="savedCount">{savedCount}</strong><span>Chờ đồng bộ</span></article>
     </section>
   );
 }
@@ -535,15 +535,15 @@ function CacheModal({ onClose }) {
   }, []);
 
   const KEY_MEANINGS = {
-    [STORAGE_KEY]: 'Danh sách các bài viết và bình luận đã quét thành công',
-    [META_KEY]: 'Siêu dữ liệu của lượt quét gần nhất (số lượng, thời gian)',
-    [BATCH_STATE_KEY]: 'Trạng thái hiện tại và lịch sử của tiến trình quét hàng loạt',
-    [BATCH_CONFIG_KEY]: 'Cấu hình giới hạn bài viết & thời gian quét hàng loạt',
-    [API_URL_KEY]: 'Địa chỉ URL cổng kết nối API Backend',
-    [TOKEN_KEY]: 'Token xác thực quyền gửi dữ liệu lên Backend',
-    [SCANNED_URLS_KEY]: 'Danh sách các URL bài viết đã quét (để loại trừ bài cũ)',
-    [BATCH_ATTEMPTED_URLS_KEY]: 'Danh sách các URL bài viết đã thử quét/lỗi (để loại trừ)',
-    [LEAD_ANALYSIS_KEY]: 'Kết quả phân tích lọc lead tuyển sinh (cục bộ)',
+    [STORAGE_KEY]: 'Bộ nhớ đệm chứa bài viết & bình luận đã quét (chờ đồng bộ lên Backend)',
+    [META_KEY]: 'Thông tin tổng hợp của lượt quét gần nhất (thời gian, URL, số lượng)',
+    [BATCH_STATE_KEY]: 'Trạng thái và lịch sử chi tiết của tiến trình quét hàng loạt (Batch Scan)',
+    [BATCH_CONFIG_KEY]: 'Cấu hình giới hạn số bài & thời gian cho quét hàng loạt',
+    [API_URL_KEY]: 'Địa chỉ kết nối đến API cổng Backend (BE)',
+    [TOKEN_KEY]: 'Mã Token xác thực để được phép gửi dữ liệu lên Backend',
+    [SCANNED_URLS_KEY]: 'Danh sách URL các bài viết đã quét thành công (để tránh quét trùng)',
+    [BATCH_ATTEMPTED_URLS_KEY]: 'Danh sách URL các bài viết đã thử quét/bị lỗi trong lượt chạy này',
+    [LEAD_ANALYSIS_KEY]: 'Dữ liệu phân tích lọc Lead tuyển sinh lưu trữ cục bộ',
   };
 
   const getMeaning = (key) => KEY_MEANINGS[key] || 'Dữ liệu hệ thống / Khác';

@@ -87,7 +87,7 @@ export default function HeaderStats() {
       </div>
       <div className="stat-card">
         <div className="stat-value" id="savedCount">{savedCount}</div>
-        <div className="stat-label">Đã lưu</div>
+        <div className="stat-label">Chờ đồng bộ</div>
       </div>
     </div>
   );
