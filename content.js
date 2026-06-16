@@ -1,6 +1,6 @@
 (function initializeDaoEduLeadScannerContent() {
-if (globalThis.__daoEduLeadScannerContentVersion === 33) return;
-globalThis.__daoEduLeadScannerContentVersion = 33;
+if (globalThis.__daoEduLeadScannerContentVersion === 34) return;
+globalThis.__daoEduLeadScannerContentVersion = 34;
 
 const EXPAND_TEXT_PATTERNS = [
   /^xem thêm bình luận$/i,
@@ -22,10 +22,10 @@ const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const BATCH_ATTEMPTED_URLS_KEY =
   'daoEduLeadScannerBatchAttemptedPostUrls';
 const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-const CONTENT_SCRIPT_VERSION = 33;
+const CONTENT_SCRIPT_VERSION = 34;
 const DEEP_SCAN_STABLE_PASSES = 4;
 const MAX_STALLED_CLICKS_PER_EXPANDER = 4;
-const commentExpanderAttempts = new WeakMap();
+const commentExpanderAttemptCounts = new Map();
 let groupBatchRunning = false;
 let activeGroupBatchJobId = '';
 let groupBatchCancelRequested = false;
@@ -665,8 +665,8 @@ async function deepScanCurrentPost(_maxRounds, maxClicksPerRound) {
       afterState.scrollHeight > beforeState.scrollHeight + 2;
 
     if (madeProgress) {
-      for (const node of result.clickedNodes) {
-        if (node.isConnected) commentExpanderAttempts.set(node, 0);
+      for (const key of result.clickedKeys) {
+        commentExpanderAttemptCounts.set(key, 0);
       }
     }
 
@@ -733,18 +733,19 @@ async function deepScanCurrentPost(_maxRounds, maxClicksPerRound) {
 async function expandCommentRound(maxClicks) {
   const candidates = findCommentExpanders().slice(0, maxClicks);
   let clickedExpanders = 0;
-  const clickedNodes = [];
+  const clickedKeys = [];
 
   for (const node of candidates) {
     if (!(node instanceof Element) || !node.isConnected || !isVisible(node)) {
       continue;
     }
-    commentExpanderAttempts.set(
-      node,
-      Number(commentExpanderAttempts.get(node) || 0) + 1,
+    const key = getCommentExpanderKey(node);
+    commentExpanderAttemptCounts.set(
+      key,
+      Number(commentExpanderAttemptCounts.get(key) || 0) + 1,
     );
     node.click();
-    clickedNodes.push(node);
+    clickedKeys.push(key);
     clickedExpanders += 1;
     await sleep(120);
   }
@@ -762,7 +763,7 @@ async function expandCommentRound(maxClicks) {
   return {
     ok: true,
     clickedExpanders,
-    clickedNodes,
+    clickedKeys,
     scrollTop: scrollContainer?.scrollTop || window.scrollY || 0,
     scrollHeight:
       scrollContainer?.scrollHeight || document.documentElement.scrollHeight,
@@ -1965,22 +1966,48 @@ function findCommentExpanders() {
   const root = getPostRoot();
   return uniqueNodes(
     [...root.querySelectorAll('[role="button"], button')].filter((node) => {
-      const text = cleanText(
-        node.innerText ||
-          node.getAttribute('aria-label') ||
-          node.textContent,
-      );
+      const text = getCommentExpanderText(node);
+      const key = getCommentExpanderKey(node, text);
       return (
         isVisible(node) &&
-        Number(commentExpanderAttempts.get(node) || 0) <
+        Number(commentExpanderAttemptCounts.get(key) || 0) <
           MAX_STALLED_CLICKS_PER_EXPANDER &&
         isCommentExpanderText(text)
       );
     }),
   ).sort(
     (a, b) =>
-      Number(commentExpanderAttempts.get(a) || 0) -
-      Number(commentExpanderAttempts.get(b) || 0),
+      Number(commentExpanderAttemptCounts.get(getCommentExpanderKey(a)) || 0) -
+      Number(commentExpanderAttemptCounts.get(getCommentExpanderKey(b)) || 0),
+  );
+}
+
+function getCommentExpanderText(node) {
+  return cleanText(
+    node.innerText ||
+      node.getAttribute('aria-label') ||
+      node.textContent,
+  );
+}
+
+function getCommentExpanderKey(node, text = getCommentExpanderText(node)) {
+  const root = getPostRoot();
+  const rootRect =
+    root instanceof Element
+      ? root.getBoundingClientRect()
+      : { top: 0 };
+  const rect = node.getBoundingClientRect();
+  const article = node.closest('[role="article"]');
+  const articleText = article
+    ? cleanText(cloneWithoutNestedArticles(article).innerText).slice(0, 500)
+    : '';
+  const roughOffset = Math.round((rect.top - rootRect.top) / 80);
+  return hash(
+    [
+      normalizeUiText(text),
+      articleText ? hash(articleText) : '',
+      roughOffset,
+    ].join('|'),
   );
 }
 
