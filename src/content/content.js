@@ -618,13 +618,10 @@ async function waitForLocation(expectedUrl, timeoutMilliseconds) {
 async function saveScanResultLocally(result) {
   const data = await chrome.storage.local.get([STORAGE_KEY, META_KEY]);
   const existing = data[STORAGE_KEY] || [];
-  const currentPostId = result.summary.postId;
   const retained = existing.filter(
     (item) =>
       Number(item.parserVersion || 0) >= 21 &&
-      isPostUrl(item.pageUrl) &&
-      item.pageUrl !== result.summary.postUrl &&
-      item.postId !== currentPostId,
+      isPostUrl(item.pageUrl)
   );
   const map = new Map(retained.map((item) => [item.fingerprint, item]));
 

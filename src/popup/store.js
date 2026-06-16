@@ -211,10 +211,9 @@ export const useStore = create((set, get) => ({
       // Merge và lưu vào storage
       const stored = await chrome.storage.local.get(STORAGE_KEY);
       const existing = stored[STORAGE_KEY] || [];
-      const retained = existing.filter(item => item.pageUrl !== result.summary.postUrl);
       
-      // Merge items
-      const map = new Map(retained.map(i => [i.fingerprint, i]));
+      // Merge items (keep old ones, including from current post, updating by fingerprint)
+      const map = new Map(existing.map(i => [i.fingerprint, i]));
       for (const item of (result.items || [])) {
         map.set(item.fingerprint, { ...map.get(item.fingerprint), ...item, lastSeenAt: new Date().toISOString() });
       }
@@ -300,6 +299,16 @@ export const useStore = create((set, get) => ({
   },
 
   pullTemFromBackend: async () => {
+    const { items } = get();
+    if (items.length > 0) {
+      const ok = window.confirm(
+        'Bạn đang có dữ liệu cào mới chưa đồng bộ lên Backend. Việc xóa cache và tải lại từ BE sẽ xóa sạch dữ liệu này. Bạn có chắc chắn muốn tiếp tục không?'
+      );
+      if (!ok) {
+        set({ syncMessage: 'Đã hủy thao tác xóa cache.', syncError: false });
+        return;
+      }
+    }
     set({ syncMessage: 'Đang xóa cache và tải lại từ BE...', syncError: false });
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

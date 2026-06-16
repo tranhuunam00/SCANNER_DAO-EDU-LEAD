@@ -24,7 +24,7 @@ function shortenPostUrl(url) {
   try {
     const u = new URL(url);
     const m = u.pathname.match(/\/posts\/([^/]+)/) || u.pathname.match(/\/permalink\/([^/]+)/);
-    if (m) return `Bài viết #${m[1].slice(0, 10)}`;
+    if (m) return `Bài viết #${m[1]}`;
     const parts = u.pathname.split('/').filter(Boolean);
     return parts.length ? `Bài viết #${parts[parts.length - 1]}` : url;
   } catch {
