@@ -212,6 +212,34 @@ export const useStore = create((set, get) => ({
 
       await chrome.storage.local.set({ [STORAGE_KEY]: merged, [META_KEY]: meta });
 
+      // Cập nhật danh sách bài đã quét để tránh quét trùng lặp khi chạy hàng loạt (ignoreScanned)
+      if (result.summary.postUrl) {
+        const scannedUrlsData = await chrome.storage.local.get('daoEduLeadScannerScannedPostUrls');
+        const scannedUrls = new Set(scannedUrlsData.daoEduLeadScannerScannedPostUrls || []);
+        scannedUrls.add(result.summary.postUrl);
+        await chrome.storage.local.set({ daoEduLeadScannerScannedPostUrls: [...scannedUrls] });
+      }
+
+      // Cập nhật hiển thị lịch sử quét trên popup (batchState.history)
+      if (result.summary.postUrl) {
+        const batchData = await chrome.storage.local.get(BATCH_STATE_KEY);
+        const batchState = batchData[BATCH_STATE_KEY] || { ...DEFAULT_BATCH_STATE };
+        const currentHistory = Array.isArray(batchState.history) ? batchState.history : [];
+        
+        // Loại bỏ trùng lặp và unshift bản ghi mới nhất lên đầu danh sách
+        const filteredHistory = currentHistory.filter(item => item.postUrl !== result.summary.postUrl);
+        filteredHistory.unshift({
+          postUrl: result.summary.postUrl,
+          comments: result.summary.comments,
+          status: 'SUCCESS',
+        });
+        
+        batchState.history = filteredHistory;
+        batchState.processedTotal = filteredHistory.filter(item => item.status === 'SUCCESS').length;
+        
+        await chrome.storage.local.set({ [BATCH_STATE_KEY]: batchState });
+      }
+
       const note = result.summary.postDetected ? '' : ' Không thấy nội dung bài gốc.';
       const msg = `Đã quét ${result.summary.posts} bài và ${result.summary.comments} bình luận.${note}`;
       set({ statusMsg: msg, statusError: false });
