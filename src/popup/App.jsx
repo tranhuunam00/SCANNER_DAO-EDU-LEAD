@@ -48,17 +48,63 @@ function getPostId(url) {
 function HeaderStats() {
   const items = useStore(s => s.items);
   const batchState = useStore(s => s.batchState);
+  const scannedPostUrls = useStore(s => s.scannedPostUrls);
 
-  let postCount = 0, commentCount = 0, savedCount = 0;
-  if (items && items.length > 0) {
-    postCount = items.filter(i => i.kind === 'POST').length;
-    commentCount = items.filter(i => i.kind === 'COMMENT').length;
-    savedCount = items.length;
-  } else if (batchState.history && batchState.history.length > 0) {
-    postCount = batchState.history.length;
-    commentCount = batchState.history.reduce((s, i) => s + (Number(i.comments) || 0), 0);
-    savedCount = postCount;
+  const getUniqueUrls = (urls) => {
+    const seen = new Set();
+    const unique = [];
+    (urls || []).forEach(url => {
+      const id = getPostId(url);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        unique.push(url);
+      }
+    });
+    return unique;
+  };
+
+  const getCommentCountForPost = (url) => {
+    const id = getPostId(url);
+    if (!id) return 0;
+    
+    // Check local unsynced items first
+    if (Array.isArray(items) && items.length > 0) {
+      const count = items.filter(
+        item => item.kind === 'COMMENT' && getPostId(item.pageUrl) === id
+      ).length;
+      if (count > 0) return count;
+    }
+    
+    // Fallback to history
+    if (batchState && Array.isArray(batchState.history)) {
+      const match = batchState.history.find(h => getPostId(h.postUrl) === id);
+      if (match && match.status === 'SUCCESS') {
+        return Number(match.comments) || 0;
+      }
+    }
+    return 0;
+  };
+
+  const combinedUrls = [...(scannedPostUrls || [])];
+  if (Array.isArray(items)) {
+    items.forEach(item => {
+      if (item.kind === 'POST' && item.pageUrl) {
+        combinedUrls.push(item.pageUrl);
+      }
+    });
   }
+  if (batchState && Array.isArray(batchState.history)) {
+    batchState.history.forEach(h => {
+      if (h.status === 'SUCCESS' && h.postUrl) {
+        combinedUrls.push(h.postUrl);
+      }
+    });
+  }
+
+  const uniqueScanned = getUniqueUrls(combinedUrls);
+  const postCount = uniqueScanned.length;
+  const commentCount = uniqueScanned.reduce((sum, url) => sum + getCommentCountForPost(url), 0);
+  const savedCount = Array.isArray(items) ? items.length : 0;
 
   return (
     <section className="stats">

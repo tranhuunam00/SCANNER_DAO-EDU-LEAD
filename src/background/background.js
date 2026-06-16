@@ -88,7 +88,7 @@ async function startBatch(sourceTabId, continueBatch, config) {
     activePostUrl: '',
     activeScanTabId: null,
     lastResult: null,
-    history: continueBatch ? (currentState.history || []) : [],
+    history: currentState.history || [],
   });
 
   const response = await chrome.tabs.sendMessage(sourceTabId, {
