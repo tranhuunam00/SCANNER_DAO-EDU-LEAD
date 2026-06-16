@@ -166,7 +166,7 @@ function ScanActions() {
         </label>
         <label className="checkbox-label">
           <input type="checkbox" id="batchIgnoreScanned"
-            checked={batchConfig.ignoreScanned}
+            checked={batchConfig.ignoreScanned || false}
             onChange={e => updateConfig('ignoreScanned', e.target.checked)} />
           <span>Chỉ quét bài mới (Bỏ qua bài đã dán tem)</span>
         </label>

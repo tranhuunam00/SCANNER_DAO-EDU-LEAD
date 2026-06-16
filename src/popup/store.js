@@ -63,7 +63,13 @@ export const useStore = create((set, get) => ({
       batchState: storedBatch && typeof storedBatch === 'object'
         ? { ...DEFAULT_BATCH_STATE, ...storedBatch, history: Array.isArray(storedBatch.history) ? storedBatch.history : [] }
         : { ...DEFAULT_BATCH_STATE },
-      batchConfig: data[BATCH_CONFIG_KEY] || { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true },
+      batchConfig: {
+        limit: 10,
+        postTimeoutSec: 120,
+        totalTimeoutMin: 30,
+        ignoreScanned: true,
+        ...(data[BATCH_CONFIG_KEY] || {})
+      },
       apiBaseUrl: data[API_URL_KEY] || 'http://localhost:5000/api',
       token: data[TOKEN_KEY] || '',
     });
@@ -336,6 +342,12 @@ chrome.storage.onChanged.addListener((changes, ns) => {
     updates.batchState = val && typeof val === 'object'
       ? { ...DEFAULT_BATCH_STATE, ...val, history: Array.isArray(val.history) ? val.history : [] }
       : { ...DEFAULT_BATCH_STATE };
+  }
+  if (changes[BATCH_CONFIG_KEY]) {
+    const val = changes[BATCH_CONFIG_KEY].newValue;
+    updates.batchConfig = val && typeof val === 'object'
+      ? { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true, ...val }
+      : { limit: 10, postTimeoutSec: 120, totalTimeoutMin: 30, ignoreScanned: true };
   }
   if (Object.keys(updates).length) useStore.setState(updates);
 });
