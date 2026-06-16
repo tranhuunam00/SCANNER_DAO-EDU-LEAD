@@ -2296,14 +2296,21 @@ async function syncBackendScannedPosts() {
       type: 'FETCH_SCANNED_POST_IDS',
       groupUrl,
     });
-    if (res?.ok && Array.isArray(res.postIds)) {
-      const scanned = await getScannedUrlSet();
-      res.postIds.forEach(id => {
-        if (id) scanned.add(normalizePostUrl(`${groupUrl}posts/${id}/`));
-      });
-      await chrome.storage.local.set({ [SCANNED_POSTS_KEY]: [...scanned] });
-      applyScannedMarkers(scanned);
-    }
+      if (res?.ok) {
+        const scanned = await getScannedUrlSet();
+        if (Array.isArray(res.postIds)) {
+          res.postIds.forEach(id => {
+            if (id) scanned.add(normalizePostUrl(`${groupUrl}posts/${id}/`));
+          });
+          await chrome.storage.local.set({ [SCANNED_POSTS_KEY]: [...scanned] });
+          applyScannedMarkers(scanned);
+        }
+        if (Array.isArray(res.recentScans) && res.recentScans.length > 0) {
+          const state = await getContentBatchState();
+          state.history = res.recentScans;
+          await chrome.storage.local.set({ [BATCH_STATE_KEY]: state });
+        }
+      }
   } catch (e) {
     // Ignore message port errors
   }

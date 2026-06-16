@@ -369,7 +369,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const res = await fetch(url, { headers });
         if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const result = await res.json();
-        sendResponse({ ok: true, postIds: result.postIds || [] });
+        sendResponse({ ok: true, postIds: result.postIds || [], recentScans: result.recentScans || [] });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
       }
