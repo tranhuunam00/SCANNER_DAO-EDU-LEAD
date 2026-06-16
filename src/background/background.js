@@ -228,9 +228,16 @@ async function ensureContentScript(tabId) {
     // Inject below when the page predates the extension reload.
   }
 
+  // Đọc đường dẫn thực tế từ manifest (CRXJS có thể đổi tên file)
+  const manifest = chrome.runtime.getManifest();
+  const scripts = manifest.content_scripts?.[0]?.js || [
+    'assets/batch-queue.js',
+    'assets/content.js',
+  ];
+
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ['batch-queue.js', 'content.js'],
+    files: scripts,
   });
   await sleep(250);
 }

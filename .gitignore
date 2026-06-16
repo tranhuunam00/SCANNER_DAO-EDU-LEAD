@@ -5,3 +5,4 @@ Thumbs.db
 .env.local
 scanner-config.js
 dist/
+/node_modules
