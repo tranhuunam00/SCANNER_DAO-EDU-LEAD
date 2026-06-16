@@ -33,24 +33,45 @@ const previewNode = document.getElementById("preview");
 scanButton.addEventListener("click", runDeepScan);
 forceStopButton.addEventListener("click", forceStopAll);
 syncBackendButton.addEventListener("click", syncToBackend);
+function addLog(msg, isError = false) {
+  const logNode = document.getElementById("debugLog");
+  if (!logNode) return;
+  const div = document.createElement("div");
+  div.style.color = isError ? "red" : "#333";
+  div.style.marginBottom = "4px";
+  div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logNode.appendChild(div);
+  logNode.scrollTop = logNode.scrollHeight;
+}
+
 forceSyncTemButton.addEventListener("click", async () => {
   setSyncMessage("Đang tải lại tem từ BE...");
+  addLog("Bắt đầu tải tem 100 bài từ BE...");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error("Chưa mở tab Facebook nào.");
+    if (!tab?.id) {
+      addLog("Lỗi: Chưa mở tab Facebook nào.", true);
+      throw new Error("Chưa mở tab Facebook nào.");
+    }
     
     await ensureContentScript(tab.id);
+    addLog(`Đang gửi lệnh tới tab: ${tab.id}`);
     const res = await chrome.tabs.sendMessage(tab.id, { type: "FORCE_SYNC_SCANNED_POSTS" });
     
     if (res?.ok) {
+      addLog(`Thành công! Tải về ${res.count || 0} bài.`);
       setSyncMessage("Đã tải xong tem từ BE!", false);
+      await loadBatchState();
     } else {
-      throw new Error("BE không phản hồi hoặc từ chối kết nối.");
+      addLog(`Thất bại: ${res?.error || 'Không rõ lỗi'}`, true);
+      throw new Error(res?.error || "BE không phản hồi hoặc từ chối kết nối.");
     }
   } catch (err) {
     if (String(err.message).includes("Receiving end does not exist")) {
+      addLog("Lỗi kẹt tiến trình cũ. Vui lòng F5 Facebook.", true);
       setSyncMessage("Vui lòng tải lại trang (F5) Facebook trước khi đồng bộ.", true);
     } else {
+      addLog(`Bắt lỗi: ${err.message}`, true);
       setSyncMessage(err.message || "Lỗi kết nối tải tem.", true);
     }
   }
@@ -808,26 +829,46 @@ async function loadBatchState() {
   const status = document.getElementById("batchStatus");
   const message = document.getElementById("batchMessage");
   const progress = document.getElementById("batchProgress");
-  const visible = state.status !== "IDLE";
+  const hasHistory = state.history && state.history.length > 0;
+  const visible = state.status !== "IDLE" || hasHistory;
 
   panel.classList.toggle("hidden", !visible);
-  status.textContent =
-    state.status === "RUNNING"
-      ? `${state.current}/${state.batchTotal}`
-      : state.status === "AWAITING_CONTINUE"
-        ? "Chờ tiếp tục"
-        : state.status === "CANCELLED"
-          ? "Đã dừng"
-          : state.status === "ERROR"
-            ? "Lỗi"
-            : "Hoàn tất";
-  message.textContent = state.message || "";
-  progress.style.width = `${
-    state.batchTotal ? Math.round((state.current / state.batchTotal) * 100) : 0
-  }%`;
+  
+  if (state.status === "IDLE" && hasHistory) {
+    status.textContent = "Lịch sử từ BE";
+    message.textContent = "Danh sách bài quét gần nhất:";
+    progress.parentElement.style.display = "none";
+  } else {
+    progress.parentElement.style.display = "block";
+    status.textContent =
+      state.status === "RUNNING"
+        ? `${state.current}/${state.batchTotal}`
+        : state.status === "AWAITING_CONTINUE"
+          ? "Chờ tiếp tục"
+          : state.status === "CANCELLED"
+            ? "Đã dừng"
+            : state.status === "ERROR"
+              ? "Lỗi"
+              : "Hoàn tất";
+    message.textContent = state.message || "";
+    progress.style.width = `${
+      state.batchTotal ? Math.round((state.current / state.batchTotal) * 100) : 0
+    }%`;
+  }
 
   const historyContainer = document.getElementById("batchHistory");
   if (historyContainer && state.history && state.history.length > 0) {
+    let totalPosts = state.history.length;
+    let totalComments = state.history.reduce((sum, item) => sum + (Number(item.comments) || 0), 0);
+    
+    // Nếu bộ nhớ chờ (local items) đang trống thì lấy luôn số liệu BE đắp lên
+    const itemsData = await chrome.storage.local.get("daoEduLeadScannerItems");
+    const localItems = itemsData.daoEduLeadScannerItems || [];
+    if (localItems.length === 0) {
+      document.getElementById("postCount").textContent = totalPosts;
+      document.getElementById("commentCount").textContent = totalComments;
+      document.getElementById("savedCount").textContent = totalPosts;
+    }
     historyContainer.innerHTML = state.history.map((item) => {
       const displayUrl = item.postUrl || "Bài viết";
       let shortUrl = displayUrl;

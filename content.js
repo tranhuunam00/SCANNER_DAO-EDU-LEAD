@@ -38,7 +38,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'FORCE_SYNC_SCANNED_POSTS') {
     lastSyncedGroupUrl = '';
-    syncBackendScannedPosts().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    syncBackendScannedPosts()
+      .then((res) => sendResponse(res))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
 
@@ -2286,9 +2288,15 @@ let lastSyncedGroupUrl = '';
 
 async function syncBackendScannedPosts() {
   const isGroup = location.pathname.startsWith('/groups/');
-  const groupUrl = isGroup ? location.origin + location.pathname.split('/').slice(0, 3).join('/') + '/' : '';
+  let groupUrl = '';
+  if (isGroup) {
+    groupUrl = location.origin + location.pathname.split('/').slice(0, 3).join('/') + '/';
+  } else {
+    const path1 = location.pathname.split('/')[1];
+    groupUrl = path1 ? location.origin + '/' + path1 + '/' : location.href;
+  }
   
-  if (!groupUrl || groupUrl === lastSyncedGroupUrl) return;
+  if (!groupUrl || groupUrl === lastSyncedGroupUrl) return { ok: false, error: 'Khong thay groupUrl hoac da sync roi' };
   lastSyncedGroupUrl = groupUrl;
 
   try {
@@ -2302,31 +2310,35 @@ async function syncBackendScannedPosts() {
           res.postIds.forEach(id => {
             if (id) scanned.add(normalizePostUrl(`${groupUrl}posts/${id}/`));
           });
-          await chrome.storage.local.set({ [SCANNED_POSTS_KEY]: [...scanned] });
+          await chrome.storage.local.set({ 'daoEduLeadScannerScannedPostUrls': [...scanned] });
           applyScannedMarkers(scanned);
         }
-        if (Array.isArray(res.recentScans) && res.recentScans.length > 0) {
+        if (Array.isArray(res.recentScans)) {
           const state = await getContentBatchState();
-          state.history = res.recentScans;
-          await chrome.storage.local.set({ [BATCH_STATE_KEY]: state });
+          if (state.status !== "RUNNING" && state.status !== "AWAITING_CONTINUE") {
+            state.history = res.recentScans;
+            await chrome.storage.local.set({ [BATCH_STATE_KEY]: state });
+          }
         }
+        return { ok: true, count: Array.isArray(res.recentScans) ? res.recentScans.length : 0 };
+      } else {
+        lastSyncedGroupUrl = ''; // allow retry
+        return { ok: false, error: res?.error || 'API trả về lỗi hoặc trống' };
       }
   } catch (e) {
-    // Ignore message port errors
+    lastSyncedGroupUrl = ''; // allow retry
+    return { ok: false, error: e.message };
   }
 }
 
-const syncIntervalId = setInterval(syncBackendScannedPosts, 3000);
-setTimeout(syncBackendScannedPosts, 1000);
+// syncBackendScannedPosts loop removed by user request
+// User will trigger sync manually via popup button
 
 const renderIntervalId = setInterval(async () => {
   if (globalThis.__daoEduLeadScannerContentVersion !== CONTENT_SCRIPT_VERSION) {
     clearInterval(renderIntervalId);
-    clearInterval(syncIntervalId);
     return;
   }
-  const isGroup = location.pathname.startsWith('/groups/');
-  if (!isGroup) return;
   try {
     const scanned = await getScannedUrlSet();
     applyScannedMarkers(scanned);

@@ -1,8 +1,17 @@
 (function exposeBatchQueue(root) {
+  function extractPostId(urlStr) {
+    try {
+      const match = String(urlStr).match(/\/(?:posts|permalink|videos|photos\/a\.[^/]+)\/([^/?]+)/);
+      return match ? match[1] : String(urlStr);
+    } catch {
+      return String(urlStr);
+    }
+  }
+
   function create(limit, excludedUrls = []) {
     const maximum = Math.max(0, Math.floor(Number(limit) || 0));
-    const knownUrls = new Set(
-      (excludedUrls || []).map(String).filter(Boolean),
+    const knownIds = new Set(
+      (excludedUrls || []).map(url => extractPostId(url)).filter(Boolean)
     );
     const queuedUrls = [];
 
@@ -10,10 +19,11 @@
       append(urls) {
         for (const value of urls || []) {
           const url = String(value || '');
-          if (!url || knownUrls.has(url) || queuedUrls.length >= maximum) {
+          const id = extractPostId(url);
+          if (!url || !id || knownIds.has(id) || queuedUrls.length >= maximum) {
             continue;
           }
-          knownUrls.add(url);
+          knownIds.add(id);
           queuedUrls.push(url);
         }
         return queuedUrls.length;
