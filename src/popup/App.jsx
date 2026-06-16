@@ -77,25 +77,21 @@ function BatchPanel() {
   const current = batchState.current || 0;
   const batchTotal = batchState.batchTotal || 0;
   const message = batchState.message || '';
-  const history = Array.isArray(batchState.history) ? batchState.history : [];
-  const hasHistory = history.length > 0;
-  const visible = status !== 'IDLE' || hasHistory;
+
+  const visible = status !== 'IDLE';
   if (!visible) return null;
 
   const isRunning = status === 'RUNNING';
   const isAwaiting = status === 'AWAITING_CONTINUE';
-  const isIdle = status === 'IDLE';
 
   let statusLabel = '';
-  if (isIdle && hasHistory) statusLabel = 'Lịch sử từ BE';
-  else if (isRunning) statusLabel = `${current}/${batchTotal}`;
+  if (isRunning) statusLabel = `${current}/${batchTotal}`;
   else if (isAwaiting) statusLabel = 'Chờ tiếp tục';
   else if (status === 'CANCELLED') statusLabel = 'Đã dừng';
   else if (status === 'ERROR') statusLabel = 'Lỗi';
   else statusLabel = 'Hoàn tất';
 
   const pct = batchTotal ? Math.round((current / batchTotal) * 100) : 0;
-  const showProgress = !(isIdle && hasHistory);
 
   return (
     <section id="batchPanel" className="batch-panel">
@@ -103,33 +99,10 @@ function BatchPanel() {
         <strong>Quét hàng loạt</strong>
         <span id="batchStatus">{statusLabel}</span>
       </div>
-      {showProgress && (
-        <div className="progress">
-          <span id="batchProgress" style={{ width: `${pct}%` }}></span>
-        </div>
-      )}
-      <p id="batchMessage">{isIdle && hasHistory ? 'Danh sách bài quét gần nhất:' : (message || '')}</p>
-
-      {hasHistory && (
-        <div className="batch-history" id="batchHistory">
-          {history.map((item, i) => {
-            const isSuccess = item.status === 'SUCCESS';
-            const color = isSuccess ? '#16a34a' : '#ef4444';
-            const statusText = isSuccess
-              ? `${item.comments} bình luận`
-              : `Lỗi: ${item.error || 'không xác định'}`;
-            const shortUrl = shortenPostUrl(item.postUrl || '');
-            return (
-              <div key={i} className="batch-history-item">
-                <a className="batch-history-link" href={item.postUrl || '#'} target="_blank" rel="noopener noreferrer" title={item.postUrl}>
-                  {shortUrl}
-                </a>
-                <span className="batch-history-count" style={{ color }}>{statusText}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <div className="progress">
+        <span id="batchProgress" style={{ width: `${pct}%` }}></span>
+      </div>
+      <p id="batchMessage">{message || ''}</p>
 
       {isRunning && (
         <button id="stopBatch" className="batch-stop" onClick={stopBatch}>

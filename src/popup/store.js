@@ -161,7 +161,7 @@ export const useStore = create((set, get) => ({
     }
   },
 
-  addLog: (msg) => set(state => ({ logs: [...state.logs.slice(-49), `[${new Date().toLocaleTimeString('vi-VN')}] ${msg}`] })),
+  addLog: (msg) => set(state => ({ logs: [...state.logs.slice(-199), `[${new Date().toLocaleTimeString('vi-VN')}] ${msg}`] })),
 
   scanSinglePost: async (postUrl) => {
     const { addLog } = get();
@@ -270,18 +270,21 @@ export const useStore = create((set, get) => ({
   },
 
   syncToBackend: async () => {
-    const { items, apiBaseUrl, token } = get();
+    const { items, apiBaseUrl, token, addLog } = get();
     if (!items.length) return;
-    if (!token) {
-      set({ syncMessage: 'Bạn chưa nhập Token kết nối API!', syncError: true });
-      return;
-    }
+    
+    addLog('Bắt đầu đồng bộ dữ liệu lên Backend...');
     set({ syncMessage: 'Đang đồng bộ...', syncError: false });
     try {
       const base = (apiBaseUrl || DEFAULT_API_URL).replace(/\/+$/, '');
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['x-dao-edu-scanner-token'] = token;
+      }
+      
       const res = await fetch(`${base}/facebook-lead-scans`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-dao-edu-scanner-token': token },
+        headers,
         body: JSON.stringify({ items }),
       });
       if (!res.ok) {
@@ -290,16 +293,20 @@ export const useStore = create((set, get) => ({
       }
       const data = await res.json();
       await chrome.storage.local.set({ [STORAGE_KEY]: [] });
-      set({ items: [], meta: null, syncState: 'Đã đồng bộ', syncMessage: `Thành công! Đã đồng bộ ${data.data?.itemCount || 0} mục lên BE.`, syncError: false });
+      const successMsg = `Thành công! Đã đồng bộ ${data.data?.itemCount || 0} mục lên BE.`;
+      set({ items: [], meta: null, syncState: 'Đã đồng bộ', syncMessage: successMsg, syncError: false });
+      addLog(successMsg);
       // pull scanned from BE
       get().pullTemFromBackend();
     } catch (e) {
-      set({ syncMessage: `Đồng bộ thất bại: ${e.message}`, syncError: true });
+      const errMsg = `Đồng bộ thất bại: ${e.message}`;
+      set({ syncMessage: errMsg, syncError: true });
+      addLog(errMsg);
     }
   },
 
   pullTemFromBackend: async () => {
-    const { items } = get();
+    const { items, addLog } = get();
     if (items.length > 0) {
       const ok = window.confirm(
         'Bạn đang có dữ liệu cào mới chưa đồng bộ lên Backend. Việc xóa cache và tải lại từ BE sẽ xóa sạch dữ liệu này. Bạn có chắc chắn muốn tiếp tục không?'
@@ -309,6 +316,7 @@ export const useStore = create((set, get) => ({
         return;
       }
     }
+    addLog('Bắt đầu xóa cache và tải lại dữ liệu từ BE...');
     set({ syncMessage: 'Đang xóa cache và tải lại từ BE...', syncError: false });
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -338,13 +346,17 @@ export const useStore = create((set, get) => ({
       // Bước 2: Kéo lại từ BE
       const res = await chrome.tabs.sendMessage(tab.id, { type: 'FORCE_SYNC_SCANNED_POSTS' });
       if (res?.ok) {
-        set({ syncMessage: `Xóa cache và tải về ${res.count || 0} bài thành công!`, syncError: false, syncState: 'Đã đồng bộ' });
+        const msg = `Xóa cache và tải về ${res.count || 0} bài thành công!`;
+        set({ syncMessage: msg, syncError: false, syncState: 'Đã đồng bộ' });
+        addLog(msg);
         get().loadBatchState();
       } else {
         throw new Error(res?.error || 'Không tải được tem từ BE.');
       }
     } catch (e) {
-      set({ syncMessage: `Thất bại: ${e.message}`, syncError: true });
+      const errMsg = `Tải lại từ BE thất bại: ${e.message}`;
+      set({ syncMessage: errMsg, syncError: true });
+      addLog(errMsg);
     }
   },
 
