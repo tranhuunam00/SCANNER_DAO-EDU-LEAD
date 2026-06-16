@@ -1,0 +1,14 @@
+{
+  "name": "dao-edu-lead-scanner",
+  "version": "1.0.37",
+  "private": true,
+  "description": "Internal Chrome extension for scanning DAO EDU Facebook leads.",
+  "scripts": {
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-extension.ps1",
+    "build:local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-extension.ps1 -ApiBaseUrl http://localhost:5000/api -AllowLocal",
+    "package": "npm run build",
+    "package:local": "npm run build:local",
+    "test": "node --test tests/lead-filter.test.js",
+    "check": "node --check popup.js && node --check lead-filter.js && node --check content.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('manifest ok')\""
+  }
+}

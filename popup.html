@@ -61,6 +61,31 @@
 
       <p id="status" class="status">Sẵn sàng.</p>
 
+      <section class="sync-panel">
+        <div class="section-title">
+          <h2>Đồng bộ BE</h2>
+          <span id="syncState">Chưa đồng bộ</span>
+        </div>
+        <div class="sync-fields">
+          <input
+            id="apiBaseUrl"
+            type="url"
+            placeholder="http://localhost:5000/api"
+            autocomplete="off"
+          />
+          <input
+            id="scannerToken"
+            type="password"
+            placeholder="Scanner token nếu BE có bật"
+            autocomplete="off"
+          />
+        </div>
+        <button id="syncBackend" class="sync-button">
+          Đồng bộ BE & xóa local đã lưu
+        </button>
+        <p id="syncMessage" class="sync-message"></p>
+      </section>
+
       <section class="filter-panel">
         <div class="section-title">
           <h2>Lọc lead local</h2>
@@ -108,6 +133,7 @@
         </button>
       </footer>
     </main>
+    <script src="scanner-config.js"></script>
     <script src="lead-filter.js"></script>
     <script src="popup.js"></script>
   </body>

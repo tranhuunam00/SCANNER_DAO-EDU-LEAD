@@ -47,7 +47,9 @@ Không lưu cookie, mật khẩu hoặc token Facebook.
 - **Xuất JSON thô**: chỉ xuất một mảng bài viết. Mỗi bài có `comments`, mỗi
   bình luận có `replies` lồng nhau theo đúng cấp phản hồi.
 - **Xuất JSON có thuật toán**: xuất dữ liệu phẳng kèm kết quả chấm điểm và
-  phân loại lead của thuật toán local.
+  phân loại lead của thuật toán local. Thuật toán chấm theo cấp cây
+  `POST`/`COMMENT`/`REPLY`/`DEEP_REPLY`; ý định phải nằm trong chính câu của
+  người đó, còn ngữ cảnh cha chỉ dùng để xác định chủ đề giáo dục.
 
 Nếu nội dung bài chỉ nằm trong ảnh và Facebook không cung cấp caption dạng chữ,
 post vẫn được xuất đúng URL/ID với `missingPostContent: true` và `text` rỗng.
@@ -61,3 +63,26 @@ post vẫn được xuất đúng URL/ID với `missingPostContent: true` và `t
   hàng đợi trước khi quét. Mỗi bài được mở trong tab nền riêng, chạy cùng pipeline
   quét sâu, lưu và đánh dấu rồi đóng tab. Một lượt chỉ xử lý tối đa đúng 10 URL;
   bài lỗi không làm batch lấy bù bài thứ 11.
+
+## Đóng Gói Production
+
+1. Sửa `.env` để trỏ tới server thật:
+
+   ```env
+   DAO_EDU_SCANNER_API_BASE_URL=https://your-domain.com/api
+   DAO_EDU_SCANNER_TOKEN=
+   DAO_EDU_SCANNER_SYNC_ENDPOINT=/facebook-lead-scans
+   ```
+
+2. Tạo gói zip:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
+   ```
+
+3. File zip nằm trong `dist/dao-edu-lead-scanner-<version>.zip`. Giải nén file này
+   rồi dùng **Load unpacked** trỏ vào thư mục đã giải nén, hoặc vào
+   `chrome://extensions` và dùng **Pack extension** để tạo `.crx` nội bộ.
+
+Script sẽ sinh `scanner-config.js` trong gói build từ `.env`; file `.env`,
+`scanner-config.js`, `dist/` không được commit.

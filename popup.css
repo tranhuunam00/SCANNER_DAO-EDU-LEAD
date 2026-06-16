@@ -229,6 +229,39 @@ button.danger {
   color: #b91c1c;
 }
 
+.sync-panel {
+  margin-bottom: 14px;
+  padding: 11px;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.sync-fields {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.sync-button {
+  width: 100%;
+  border-color: #16a34a;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.sync-message {
+  min-height: 15px;
+  margin-top: 7px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sync-message.error {
+  color: #b91c1c;
+}
+
 .filter-panel {
   margin-bottom: 14px;
   padding: 11px;

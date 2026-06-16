@@ -2,7 +2,17 @@ const STORAGE_KEY = 'daoEduLeadScannerItems';
 const META_KEY = 'daoEduLeadScannerMeta';
 const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
+const API_BASE_URL_KEY = 'daoEduLeadScannerApiBaseUrl';
+const SCANNER_TOKEN_KEY = 'daoEduLeadScannerToken';
+const SYNC_STATE_KEY = 'daoEduLeadScannerSyncState';
 const MIN_PARSER_VERSION = 21;
+const RUNTIME_CONFIG = window.DaoEduScannerConfig || {};
+const DEFAULT_API_BASE_URL =
+  RUNTIME_CONFIG.apiBaseUrl || 'http://localhost:5000/api';
+const DEFAULT_SCANNER_TOKEN = RUNTIME_CONFIG.scannerToken || '';
+const SYNC_ENDPOINT = normalizeSyncEndpoint(
+  RUNTIME_CONFIG.syncEndpoint || '/facebook-lead-scans',
+);
 
 const scanButton = document.getElementById('scan');
 const postUrlInput = document.getElementById('postUrl');
@@ -10,10 +20,15 @@ const exportRawButton = document.getElementById('exportRaw');
 const exportButton = document.getElementById('export');
 const clearButton = document.getElementById('clear');
 const clearAllButton = document.getElementById('clearAll');
+const syncBackendButton = document.getElementById('syncBackend');
+const apiBaseUrlInput = document.getElementById('apiBaseUrl');
+const scannerTokenInput = document.getElementById('scannerToken');
 const batchButton = document.getElementById('batch');
 const continueBatchButton = document.getElementById('continueBatch');
 const stopBatchButton = document.getElementById('stopBatch');
 const statusNode = document.getElementById('status');
+const syncStateNode = document.getElementById('syncState');
+const syncMessageNode = document.getElementById('syncMessage');
 const previewNode = document.getElementById('preview');
 
 scanButton.addEventListener('click', runDeepScan);
@@ -21,13 +36,29 @@ exportRawButton.addEventListener('click', exportRawJson);
 exportButton.addEventListener('click', exportJson);
 clearButton.addEventListener('click', clearStorage);
 clearAllButton.addEventListener('click', clearAllCache);
+syncBackendButton.addEventListener('click', syncToBackend);
+apiBaseUrlInput.addEventListener('change', () =>
+  saveSyncSettings().catch((error) =>
+    setSyncMessage(error.message || 'Không lưu được cấu hình BE.', true),
+  ),
+);
+scannerTokenInput.addEventListener('change', () =>
+  saveSyncSettings().catch((error) =>
+    setSyncMessage(error.message || 'Không lưu được cấu hình BE.', true),
+  ),
+);
 batchButton.addEventListener('click', () => startBatch(false));
 continueBatchButton.addEventListener('click', () => startBatch(true));
 stopBatchButton.addEventListener('click', () => stopBatchScan(true));
 
-loadStoredData();
-loadBatchState();
+initializePopup();
 window.setInterval(loadBatchState, 1000);
+
+async function initializePopup() {
+  await loadSyncSettings();
+  await loadStoredData();
+  await loadBatchState();
+}
 
 async function runDeepScan() {
   setBusy(true);
@@ -84,6 +115,7 @@ async function runDeepScan() {
       [META_KEY]: meta,
     });
     await markPostScanned(result.summary.postUrl);
+    await reconcileSyncState(merged, meta);
 
     render(merged, meta);
     await analyzeAndRenderLeads(merged);
@@ -112,6 +144,7 @@ async function loadStoredData() {
       SCANNED_URLS_KEY,
     ]);
   }
+  await reconcileSyncState(items, data[META_KEY] || null);
   render(items, data[META_KEY] || null);
   await analyzeAndRenderLeads(items);
 }
@@ -186,6 +219,11 @@ function render(items, meta) {
 }
 
 async function analyzeAndRenderLeads(items) {
+  if (!items.length) {
+    await chrome.storage.local.remove(LEAD_ANALYSIS_KEY);
+    renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
+    return;
+  }
   const analysis = window.DaoEduLeadFilter.analyze(items);
   await chrome.storage.local.set({ [LEAD_ANALYSIS_KEY]: analysis });
   renderLeadAnalysis(analysis);
@@ -221,7 +259,11 @@ function renderLeadAnalysis(analysis) {
         <article class="lead-card">
           <div class="lead-card-top">
             ${author}
-            <span class="lead-score">${profile.leadScore}/100</span>
+            <span class="lead-score">${
+              profile.leadLevel && profile.leadLevel !== 'NONE'
+                ? `${profile.leadLevel} · `
+                : ''
+            }${profile.leadScore}/100</span>
           </div>
           <p class="lead-reason">${escapeHtml(profile.reasons.join(' · '))}</p>
         </article>
@@ -243,7 +285,7 @@ async function exportJson() {
     {
       exportedAt: new Date().toISOString(),
       meta: data[META_KEY] || null,
-      filterVersion: 1,
+      filterVersion: 2,
       filterSummary: leadAnalysis.summary,
       aiCandidates: leadAnalysis.aiCandidates,
       leadProfiles: leadAnalysis.profiles,
@@ -262,6 +304,263 @@ async function exportRawJson() {
   const items = await getStoredItems();
   const payload = JSON.stringify(buildRawPostTree(items), null, 2);
   await downloadJson(payload, `dao-edu-facebook-scan-raw-${Date.now()}.json`);
+}
+
+async function syncToBackend() {
+  setBusy(true);
+  setSyncMessage('Đang đồng bộ dữ liệu lên BE...');
+
+  try {
+    const items = await getStoredItems();
+    if (!items.length) {
+      throw new Error('Chưa có dữ liệu local để đồng bộ.');
+    }
+
+    await saveSyncSettings();
+    const data = await chrome.storage.local.get([
+      META_KEY,
+      LEAD_ANALYSIS_KEY,
+      API_BASE_URL_KEY,
+      SCANNER_TOKEN_KEY,
+      SYNC_STATE_KEY,
+    ]);
+    const meta = data[META_KEY] || {};
+    const localAnalysis =
+      data[LEAD_ANALYSIS_KEY] || window.DaoEduLeadFilter.analyze(items);
+    const postUrl =
+      meta.postUrl || meta.pageUrl || items[0]?.pageUrl || items[0]?.sourceUrl || '';
+    const previousState = data[SYNC_STATE_KEY] || null;
+    const scanSessionId = shouldReuseSyncSession(
+      previousState,
+      items.length,
+      postUrl,
+    )
+      ? previousState.scanSessionId
+      : crypto.randomUUID();
+    const nextState = {
+      status: 'SYNCING',
+      scanSessionId,
+      itemCount: items.length,
+      postUrl,
+      lastAttemptAt: new Date().toISOString(),
+    };
+    await chrome.storage.local.set({ [SYNC_STATE_KEY]: nextState });
+    renderSyncState(nextState);
+
+    const apiBaseUrl =
+      normalizeApiBaseUrl(data[API_BASE_URL_KEY]) || DEFAULT_API_BASE_URL;
+    const response = await fetch(buildApiUrl(apiBaseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(data[SCANNER_TOKEN_KEY]
+          ? { 'x-dao-edu-scanner-token': data[SCANNER_TOKEN_KEY] }
+          : {}),
+      },
+      body: JSON.stringify({
+        source: 'DAO_EDU_FACEBOOK_EXTENSION',
+        scanSessionId,
+        exportedAt: new Date().toISOString(),
+        meta: {
+          ...meta,
+          extensionVersion: chrome.runtime.getManifest().version,
+        },
+        localAnalysis,
+        items,
+      }),
+    });
+    const result = await readSyncResponse(response);
+    if (!response.ok || result?.ok === false) {
+      throw new Error(
+        result?.message ||
+          result?.error ||
+          `BE trả lỗi ${response.status}. Vui lòng thử lại.`,
+      );
+    }
+
+    await chrome.storage.local.remove([STORAGE_KEY, META_KEY, LEAD_ANALYSIS_KEY]);
+    const syncedState = {
+      status: 'SYNCED',
+      scanSessionId,
+      scanId: result.scanId || '',
+      itemCount: items.length,
+      acceptedItems: Number(result.acceptedItems || 0),
+      duplicateItems: Number(result.duplicateItems || 0),
+      postUrl,
+      syncedAt: new Date().toISOString(),
+    };
+    await chrome.storage.local.set({ [SYNC_STATE_KEY]: syncedState });
+    render([], null);
+    renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
+    renderSyncState(syncedState);
+    setStatus(
+      `Đã đồng bộ ${items.length} item lên BE. Local raw đã được xóa để tránh nhiễu.`,
+    );
+  } catch (error) {
+    const message = error.message || 'Không thể đồng bộ BE.';
+    const data = await chrome.storage.local.get(SYNC_STATE_KEY);
+    const failedState = {
+      ...(data[SYNC_STATE_KEY] || {}),
+      status: 'FAILED',
+      lastError: message,
+      lastAttemptAt: new Date().toISOString(),
+    };
+    await chrome.storage.local.set({ [SYNC_STATE_KEY]: failedState });
+    renderSyncState(failedState);
+    setStatus(message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function loadSyncSettings() {
+  const data = await chrome.storage.local.get([
+    API_BASE_URL_KEY,
+    SCANNER_TOKEN_KEY,
+    SYNC_STATE_KEY,
+  ]);
+  apiBaseUrlInput.value = data[API_BASE_URL_KEY] || DEFAULT_API_BASE_URL;
+  scannerTokenInput.value = data[SCANNER_TOKEN_KEY] || DEFAULT_SCANNER_TOKEN;
+  renderSyncState(data[SYNC_STATE_KEY] || null);
+}
+
+async function reconcileSyncState(items, meta) {
+  if (!items.length) return;
+  const data = await chrome.storage.local.get(SYNC_STATE_KEY);
+  const state = data[SYNC_STATE_KEY] || null;
+  const postUrl =
+    meta?.postUrl || meta?.pageUrl || items[0]?.pageUrl || items[0]?.sourceUrl || '';
+  const itemCount = items.length;
+  if (
+    (state?.status === 'FAILED' || state?.status === 'SYNCING') &&
+    shouldReuseSyncSession(state, itemCount, postUrl)
+  ) {
+    renderSyncState(state);
+    return;
+  }
+
+  const alreadySynced =
+    state?.status === 'SYNCED' &&
+    Number(state.itemCount || 0) === itemCount &&
+    String(state.postUrl || '') === String(postUrl || '');
+  if (alreadySynced) {
+    renderSyncState(state);
+    return;
+  }
+
+  const pendingState = {
+    status: 'PENDING',
+    itemCount,
+    postUrl,
+    updatedAt: new Date().toISOString(),
+  };
+  await chrome.storage.local.set({ [SYNC_STATE_KEY]: pendingState });
+  renderSyncState(pendingState);
+}
+
+async function saveSyncSettings() {
+  const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput.value);
+  if (!apiBaseUrl) {
+    setSyncMessage('API URL không hợp lệ.', true);
+    throw new Error('API URL không hợp lệ.');
+  }
+  await chrome.storage.local.set({
+    [API_BASE_URL_KEY]: apiBaseUrl,
+    [SCANNER_TOKEN_KEY]: scannerTokenInput.value.trim(),
+  });
+  apiBaseUrlInput.value = apiBaseUrl;
+}
+
+function renderSyncState(state) {
+  syncMessageNode.classList.remove('error');
+  if (!state) {
+    syncStateNode.textContent = 'Chưa đồng bộ';
+    syncMessageNode.textContent = `BE: ${apiBaseUrlInput.value || DEFAULT_API_BASE_URL}`;
+    return;
+  }
+
+  if (state.status === 'SYNCED') {
+    syncStateNode.textContent = 'Đã đồng bộ';
+    syncMessageNode.textContent = `Scan ${state.scanId || state.scanSessionId} · ${
+      state.itemCount || 0
+    } item · ${formatSyncTime(state.syncedAt)}`;
+    return;
+  }
+
+  if (state.status === 'FAILED') {
+    syncStateNode.textContent = 'Lỗi sync';
+    setSyncMessage(
+      `${state.lastError || 'Đồng bộ thất bại.'} Dữ liệu local vẫn được giữ để retry.`,
+      true,
+    );
+    return;
+  }
+
+  if (state.status === 'PENDING') {
+    syncStateNode.textContent = 'Chưa sync';
+    syncMessageNode.textContent = `${state.itemCount || 0} item local đang chờ đồng bộ BE.`;
+    return;
+  }
+
+  if (state.status === 'SYNCING') {
+    syncStateNode.textContent = 'Đang sync';
+    syncMessageNode.textContent = `Đang gửi ${state.itemCount || 0} item lên BE...`;
+    return;
+  }
+
+  syncStateNode.textContent = 'Chưa đồng bộ';
+  syncMessageNode.textContent = '';
+}
+
+function setSyncMessage(message, isError = false) {
+  syncMessageNode.textContent = message;
+  syncMessageNode.classList.toggle('error', isError);
+}
+
+function shouldReuseSyncSession(state, itemCount, postUrl) {
+  return (
+    state &&
+    ['FAILED', 'SYNCING'].includes(state.status) &&
+    state.scanSessionId &&
+    Number(state.itemCount || 0) === itemCount &&
+    String(state.postUrl || '') === String(postUrl || '')
+  );
+}
+
+async function readSyncResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) return response.json();
+  const message = await response.text();
+  return { message };
+}
+
+function normalizeApiBaseUrl(value) {
+  const input = String(value || DEFAULT_API_BASE_URL).trim();
+  try {
+    const url = new URL(input);
+    url.hash = '';
+    url.search = '';
+    const normalized = url.toString().replace(/\/+$/, '');
+    return normalized.endsWith(SYNC_ENDPOINT)
+      ? normalized.slice(0, -SYNC_ENDPOINT.length)
+      : normalized;
+  } catch {
+    return '';
+  }
+}
+
+function normalizeSyncEndpoint(value) {
+  const endpoint = String(value || '/facebook-lead-scans').trim();
+  const withLeadingSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return withLeadingSlash.replace(/\/+$/, '') || '/facebook-lead-scans';
+}
+
+function buildApiUrl(apiBaseUrl) {
+  return `${apiBaseUrl}${SYNC_ENDPOINT}`;
+}
+
+function formatSyncTime(value) {
+  return value ? new Date(value).toLocaleString('vi-VN') : '';
 }
 
 function buildRawPostTree(items) {
@@ -345,9 +644,11 @@ async function clearStorage() {
     STORAGE_KEY,
     META_KEY,
     LEAD_ANALYSIS_KEY,
+    SYNC_STATE_KEY,
   ]);
   render([], null);
   renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
+  renderSyncState(null);
   setStatus('Đã xóa dữ liệu lưu tạm.');
 }
 
@@ -370,6 +671,7 @@ async function clearAllCache() {
     panel.classList.add('hidden');
     progress.style.width = '0%';
     continueBatchButton.classList.add('hidden');
+    await loadSyncSettings();
     setStatus('Đã xóa toàn bộ cache. Có thể quét lại từ đầu.');
   } finally {
     setBusy(false);
@@ -382,6 +684,9 @@ function setBusy(busy) {
   postUrlInput.disabled = busy;
   exportRawButton.disabled = busy;
   exportButton.disabled = busy;
+  syncBackendButton.disabled = busy;
+  apiBaseUrlInput.disabled = busy;
+  scannerTokenInput.disabled = busy;
   batchButton.disabled = busy;
   continueBatchButton.disabled = busy;
   clearAllButton.disabled = busy;
