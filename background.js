@@ -358,7 +358,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     chrome.storage.local.get(['daoEduLeadScannerApiBaseUrl', 'daoEduLeadScannerToken']).then(async (data) => {
-      const apiBaseUrl = (data.daoEduLeadScannerApiBaseUrl || 'http://103.90.227.173:5000/api').replace(/\/+$/, '');
+      const apiBaseUrl = (data.daoEduLeadScannerApiBaseUrl || 'http://localhost:5000/api').replace(/\/+$/, '');
       const token = data.daoEduLeadScannerToken || '';
       
       try {

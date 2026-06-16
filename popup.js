@@ -7,7 +7,7 @@ const BATCH_CONFIG_KEY = "daoEduLeadScannerBatchConfig";
 const MIN_PARSER_VERSION = 21;
 const RUNTIME_CONFIG = window.DaoEduScannerConfig || {};
 const DEFAULT_API_BASE_URL =
-  RUNTIME_CONFIG.apiBaseUrl || "http://103.90.227.173:5000/api";
+  RUNTIME_CONFIG.apiBaseUrl || "http://localhost:5000/api";
 const SYNC_ENDPOINT = normalizeSyncEndpoint(
   RUNTIME_CONFIG.syncEndpoint || "/facebook-lead-scans",
 );
