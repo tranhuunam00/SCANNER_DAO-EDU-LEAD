@@ -2095,9 +2095,6 @@ function isCommentExpanderText(text) {
 }
 
 function findCommentsScrollContainer() {
-  const isStandalone = /\/groups\/[^/]+\/(posts|permalink)\//.test(location.pathname);
-  if (isStandalone) return null;
-
   const root = getPostRoot();
   let current = root instanceof Element ? root : document.documentElement;
 
