@@ -429,3 +429,41 @@ footer {
   border-color: #fecaca;
   background: #fff7f7;
 }
+
+.batch-history {
+  max-height: 120px;
+  overflow-y: auto;
+  margin-top: 10px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+}
+
+.batch-history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #f1f5f9;
+}
+
+.batch-history-item:last-child {
+  border-bottom: none;
+}
+
+.batch-history-link {
+  color: #15803d;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.batch-history-link:hover {
+  text-decoration: underline;
+}
+
+.batch-history-count {
+  font-weight: bold;
+}

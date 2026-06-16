@@ -885,6 +885,34 @@ async function loadBatchState() {
     state.batchTotal ? Math.round((state.current / state.batchTotal) * 100) : 0
   }%`;
 
+  const historyContainer = document.getElementById("batchHistory");
+  if (historyContainer && state.history && state.history.length > 0) {
+    historyContainer.innerHTML = state.history.map((item) => {
+      const displayUrl = item.postUrl || "Bài viết";
+      let shortUrl = displayUrl;
+      try {
+        const urlObj = new URL(displayUrl);
+        const match = urlObj.pathname.match(/\/posts\/([^/]+)/) || urlObj.pathname.match(/\/permalink\/([^/]+)/);
+        if (match) {
+          shortUrl = `Bài viết #${match[1].slice(0, 10)}`;
+        }
+      } catch {}
+
+      const isSuccess = item.status === 'SUCCESS';
+      const badgeColor = isSuccess ? '#16a34a' : '#ef4444';
+      const statusText = isSuccess ? `${item.comments} bình luận` : `Lỗi: ${item.error || 'không xác định'}`;
+
+      return `
+        <div class="batch-history-item">
+          <a class="batch-history-link" href="${escapeHtml(displayUrl)}" target="_blank" title="${escapeHtml(displayUrl)}">${escapeHtml(shortUrl)}</a>
+          <span class="batch-history-count" style="color: ${badgeColor}">${escapeHtml(statusText)}</span>
+        </div>
+      `;
+    }).join("");
+  } else if (historyContainer) {
+    historyContainer.innerHTML = "";
+  }
+
   const running = state.status === "RUNNING";
   batchButton.disabled = running;
   continueBatchButton.disabled = running;

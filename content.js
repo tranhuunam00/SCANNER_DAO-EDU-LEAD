@@ -1,6 +1,6 @@
 (function initializeDaoEduLeadScannerContent() {
-if (globalThis.__daoEduLeadScannerContentVersion === 35) return;
-globalThis.__daoEduLeadScannerContentVersion = 35;
+if (globalThis.__daoEduLeadScannerContentVersion === 36) return;
+globalThis.__daoEduLeadScannerContentVersion = 36;
 
 const EXPAND_TEXT_PATTERNS = [
   /^xem thêm bình luận$/i,
@@ -22,7 +22,7 @@ const SCANNED_URLS_KEY = 'daoEduLeadScannerScannedPostUrls';
 const BATCH_ATTEMPTED_URLS_KEY =
   'daoEduLeadScannerBatchAttemptedPostUrls';
 const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
-const CONTENT_SCRIPT_VERSION = 35;
+const CONTENT_SCRIPT_VERSION = 36;
 const DEEP_SCAN_STABLE_PASSES = 4;
 const MAX_STALLED_CLICKS_PER_EXPANDER = 4;
 const commentExpanderAttemptCounts = new Map();
@@ -141,14 +141,31 @@ async function runGroupBatch(limit, jobId) {
   let successful = 0;
   let failed = 0;
   let emptyScrollRounds = 0;
+  let lastScrollHeight = 0;
+  let lastArticleCount = 0;
   applyScannedMarkers(scannedUrls);
 
-  while (!queue.isFull() && emptyScrollRounds < 8) {
+  while (!queue.isFull() && emptyScrollRounds < 12) {
     if (await isGroupBatchCancelled(jobId)) return;
+    const currentHeight = document.documentElement.scrollHeight;
+    const currentArticleCount = document.querySelectorAll('[role="article"]').length;
+    
     const previousSize = queue.size;
     queue.append(collectVisibleBatchPostUrls());
-    emptyScrollRounds =
-      queue.size === previousSize ? emptyScrollRounds + 1 : 0;
+    
+    const madeProgress = 
+      queue.size > previousSize || 
+      currentHeight > lastScrollHeight || 
+      currentArticleCount > lastArticleCount;
+
+    if (madeProgress) {
+      emptyScrollRounds = 0;
+    } else {
+      emptyScrollRounds += 1;
+    }
+
+    lastScrollHeight = currentHeight;
+    lastArticleCount = currentArticleCount;
 
     if (queue.isFull()) break;
 
@@ -161,7 +178,7 @@ async function runGroupBatch(limit, jobId) {
       top: Math.max(window.innerHeight * 0.9, 700),
       behavior: 'smooth',
     });
-    await sleep(1800);
+    await sleep(2000);
   }
 
   const targets = queue.values();
@@ -189,6 +206,14 @@ async function runGroupBatch(limit, jobId) {
       await markBatchAttemptedLocally(postUrl);
       successful += 1;
 
+      const state = await getContentBatchState();
+      const newHistory = [...(state.history || [])];
+      newHistory.push({
+        postUrl: result.summary.postUrl || postUrl,
+        comments: result.summary.comments,
+        status: 'SUCCESS'
+      });
+
       await updateContentBatchState({
         current,
         processedTotal: await incrementContentBatchCounter('processedTotal'),
@@ -198,6 +223,7 @@ async function runGroupBatch(limit, jobId) {
           comments: result.summary.comments,
           clickedExpanders: result.summary.clickedExpanders,
         },
+        history: newHistory,
         message: `Da quet bai ${current}/${targets.length}: ${result.summary.comments} binh luan.`,
       });
 
@@ -206,6 +232,15 @@ async function runGroupBatch(limit, jobId) {
       if (await isGroupBatchCancelled(jobId)) return;
       await markBatchAttemptedLocally(postUrl);
       failed += 1;
+      const state = await getContentBatchState();
+      const newHistory = [...(state.history || [])];
+      newHistory.push({
+        postUrl,
+        comments: 0,
+        status: 'ERROR',
+        error: error.message || String(error)
+      });
+
       await updateContentBatchState({
         current,
         failedTotal: await incrementContentBatchCounter('failedTotal'),
@@ -213,6 +248,7 @@ async function runGroupBatch(limit, jobId) {
           postUrl,
           error: error.message || String(error),
         },
+        history: newHistory,
         message: `Bai ${current}/${targets.length} bi loi: ${error.message || String(error)}`,
       });
     }
@@ -260,7 +296,9 @@ function collectVisibleBatchPostUrls() {
   const directUrls = linkCandidates
     .filter(({ link, url }) => isDirectPostLink(link.href, url))
     .map(({ url }) => url);
-  const fallbackUrls = linkCandidates.map(({ url }) => url);
+  const fallbackUrls = linkCandidates
+    .filter(({ link }) => link.closest('[role="article"]'))
+    .map(({ url }) => url);
 
   const articleUrls = getFeedPostArticles()
     .map(getFeedArticlePostUrl)
@@ -1104,15 +1142,32 @@ function extractGroupPostUrl(value) {
       url.searchParams.get('group_id') ||
       url.searchParams.get('id') ||
       '';
-    const postId = normalizePostId(
-      url.searchParams.get('story_fbid') ||
-        url.searchParams.get('multi_permalinks') ||
-        url.searchParams.get('post_id') ||
-        url.searchParams.get('fbid') ||
-        url.searchParams.get('set')?.match(/^gm\.([^,&]+)$/)?.[1] ||
-        '',
-    );
-    if (groupId && postId) {
+    if (!groupId) return '';
+
+    const isMedia = /\/(?:photo|video|watch|reel|media)\b/i.test(url.pathname);
+    const setMatch = url.searchParams.get('set')?.match(/^[a-zA-Z]+\.([0-9]+)/)?.[1];
+
+    let postId = '';
+    if (isMedia) {
+      postId = normalizePostId(
+        url.searchParams.get('story_fbid') ||
+          url.searchParams.get('multi_permalinks') ||
+          url.searchParams.get('post_id') ||
+          setMatch ||
+          ''
+      );
+    } else {
+      postId = normalizePostId(
+        url.searchParams.get('story_fbid') ||
+          url.searchParams.get('multi_permalinks') ||
+          url.searchParams.get('post_id') ||
+          url.searchParams.get('fbid') ||
+          setMatch ||
+          ''
+      );
+    }
+
+    if (postId) {
       return normalizePostUrl(
         `https://www.facebook.com/groups/${groupId}/posts/${postId}/`,
       );

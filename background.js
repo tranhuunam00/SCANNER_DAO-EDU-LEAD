@@ -15,7 +15,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'START_BATCH_SCAN') {
-    startBatch(message.sourceTabId)
+    startBatch(message.sourceTabId, message.continueBatch)
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({ ok: false, error: error.message || String(error) }),
@@ -51,7 +51,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-async function startBatch(sourceTabId) {
+async function startBatch(sourceTabId, continueBatch) {
   const currentState = await getBatchState();
   if (currentState.status === 'RUNNING') {
     throw new Error('Mot luot quet dang chay.');
@@ -69,8 +69,8 @@ async function startBatch(sourceTabId) {
     message: 'Dang tim bai chua quet tren trang nhom...',
     current: 0,
     batchTotal: BATCH_SIZE,
-    processedTotal: currentState.processedTotal || 0,
-    failedTotal: currentState.failedTotal || 0,
+    processedTotal: continueBatch ? (currentState.processedTotal || 0) : 0,
+    failedTotal: continueBatch ? (currentState.failedTotal || 0) : 0,
     jobId,
     cancelRequested: false,
     sourceTabId,
@@ -78,6 +78,7 @@ async function startBatch(sourceTabId) {
     activePostUrl: '',
     activeScanTabId: null,
     lastResult: null,
+    history: continueBatch ? (currentState.history || []) : [],
   });
 
   const response = await chrome.tabs.sendMessage(sourceTabId, {
@@ -272,6 +273,7 @@ function createIdleState() {
     activePostUrl: '',
     activeScanTabId: null,
     lastResult: null,
+    history: [],
   };
 }
 
