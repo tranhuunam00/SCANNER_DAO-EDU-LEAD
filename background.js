@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-async function startBatch(sourceTabId, continueBatch) {
+async function startBatch(sourceTabId, continueBatch, config) {
   const currentState = await getBatchState();
   if (currentState.status === 'RUNNING') {
     throw new Error('Mot luot quet dang chay.');

@@ -2303,15 +2303,26 @@ async function syncBackendScannedPosts() {
   }
 }
 
-setInterval(syncBackendScannedPosts, 3000);
+const syncIntervalId = setInterval(syncBackendScannedPosts, 3000);
 setTimeout(syncBackendScannedPosts, 1000);
 
-setInterval(async () => {
-  if (globalThis.__daoEduLeadScannerContentVersion !== CONTENT_SCRIPT_VERSION) return;
+const renderIntervalId = setInterval(async () => {
+  if (globalThis.__daoEduLeadScannerContentVersion !== CONTENT_SCRIPT_VERSION) {
+    clearInterval(renderIntervalId);
+    clearInterval(syncIntervalId);
+    return;
+  }
   const isGroup = location.pathname.startsWith('/groups/');
   if (!isGroup) return;
-  const scanned = await getScannedUrlSet();
-  applyScannedMarkers(scanned);
+  try {
+    const scanned = await getScannedUrlSet();
+    applyScannedMarkers(scanned);
+  } catch (error) {
+    if (String(error).includes('Extension context invalidated')) {
+      clearInterval(renderIntervalId);
+      clearInterval(syncIntervalId);
+    }
+  }
 }, 2000);
 
 })();

@@ -1,7 +1,6 @@
 const STORAGE_KEY = "daoEduLeadScannerItems";
 const META_KEY = "daoEduLeadScannerMeta";
 const SCANNED_URLS_KEY = "daoEduLeadScannerScannedPostUrls";
-const LEAD_ANALYSIS_KEY = "daoEduLeadScannerLeadAnalysis";
 const API_BASE_URL_KEY = "daoEduLeadScannerApiBaseUrl";
 const SCANNER_TOKEN_KEY = "daoEduLeadScannerToken";
 const SYNC_STATE_KEY = "daoEduLeadScannerSyncState";
@@ -17,10 +16,7 @@ const SYNC_ENDPOINT = normalizeSyncEndpoint(
 
 const scanButton = document.getElementById("scan");
 const postUrlInput = document.getElementById("postUrl");
-const exportRawButton = document.getElementById("exportRaw");
-const exportButton = document.getElementById("export");
-const clearButton = document.getElementById("clear");
-const clearAllButton = document.getElementById("clearAll");
+const forceStopButton = document.getElementById("forceStop");
 const syncBackendButton = document.getElementById("syncBackend");
 const apiBaseUrlInput = document.getElementById("apiBaseUrl");
 const scannerTokenInput = document.getElementById("scannerToken");
@@ -37,10 +33,7 @@ const syncMessageNode = document.getElementById("syncMessage");
 const previewNode = document.getElementById("preview");
 
 scanButton.addEventListener("click", runDeepScan);
-exportRawButton.addEventListener("click", exportRawJson);
-exportButton.addEventListener("click", exportJson);
-clearButton.addEventListener("click", clearStorage);
-clearAllButton.addEventListener("click", clearAllCache);
+forceStopButton.addEventListener("click", forceStopAll);
 syncBackendButton.addEventListener("click", syncToBackend);
 apiBaseUrlInput.addEventListener("change", () =>
   saveSyncSettings().catch((error) =>
@@ -165,7 +158,6 @@ async function loadStoredData() {
   }
   await reconcileSyncState(items, data[META_KEY] || null);
   render(items, data[META_KEY] || null);
-  await analyzeAndRenderLeads(items);
 }
 
 async function getStoredItems() {
@@ -237,91 +229,16 @@ function render(items, meta) {
     .join("");
 }
 
-async function analyzeAndRenderLeads(items) {
-  if (!items.length) {
-    await chrome.storage.local.remove(LEAD_ANALYSIS_KEY);
-    renderLeadAnalysis(window.DaoEduLeadFilter.analyze([]));
-    return;
-  }
-  const analysis = window.DaoEduLeadFilter.analyze(items);
-  await chrome.storage.local.set({ [LEAD_ANALYSIS_KEY]: analysis });
-  renderLeadAnalysis(analysis);
-}
 
-function renderLeadAnalysis(analysis) {
-  const summary = analysis.summary;
-  const otherCount = summary.RECOMMENDATION + summary.NEUTRAL + summary.SPAM;
-  document.getElementById("potentialCount").textContent =
-    summary.POTENTIAL_PARENT;
-  document.getElementById("teacherAdCount").textContent = summary.TEACHER_AD;
-  document.getElementById("competitorCount").textContent =
-    summary.COMPETITOR_SALE;
-  document.getElementById("neutralCount").textContent = otherCount;
-  document.getElementById("profileCount").textContent =
-    `${summary.totalProfiles} hồ sơ`;
 
-  const leadPreview = document.getElementById("leadPreview");
-  if (!analysis.aiCandidates.length) {
-    leadPreview.innerHTML =
-      '<div class="empty">Chưa tìm thấy lead đủ điểm.</div>';
-    return;
-  }
-
-  leadPreview.innerHTML = analysis.aiCandidates
-    .slice(0, 10)
-    .map((profile) => {
-      const author = profile.authorUrl
-        ? `<a class="author-link" href="${escapeHtml(profile.authorUrl)}" target="_blank">${escapeHtml(profile.authorName)}</a>`
-        : `<strong>${escapeHtml(profile.authorName)}</strong>`;
-      return `
-        <article class="lead-card">
-          <div class="lead-card-top">
-            ${author}
-            <span class="lead-score">${
-              profile.leadLevel && profile.leadLevel !== "NONE"
-                ? `${profile.leadLevel} · `
-                : ""
-            }${profile.leadScore}/100</span>
-          </div>
-          <p class="lead-reason">${escapeHtml(profile.reasons.join(" · "))}</p>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-async function exportJson() {
-  const data = await chrome.storage.local.get([
-    STORAGE_KEY,
-    META_KEY,
-    LEAD_ANALYSIS_KEY,
+async function forceStopAll() {
+  if (!confirm("Ép buộc dừng và xóa mọi tiến trình ngầm đang chạy?")) return;
+  await chrome.runtime.sendMessage({ type: "STOP_BATCH_SCAN" }).catch(() => {});
+  await chrome.storage.local.remove([
+    "daoEduLeadScannerBatchState",
+    "daoEduLeadScannerBatchAttemptedUrls"
   ]);
-  const items = filterValidItems(data[STORAGE_KEY] || []);
-  const leadAnalysis =
-    data[LEAD_ANALYSIS_KEY] || window.DaoEduLeadFilter.analyze(items);
-  const payload = JSON.stringify(
-    {
-      exportedAt: new Date().toISOString(),
-      meta: data[META_KEY] || null,
-      filterVersion: 2,
-      filterSummary: leadAnalysis.summary,
-      aiCandidates: leadAnalysis.aiCandidates,
-      leadProfiles: leadAnalysis.profiles,
-      items,
-    },
-    null,
-    2,
-  );
-  await downloadJson(
-    payload,
-    `dao-edu-facebook-scan-analyzed-${Date.now()}.json`,
-  );
-}
-
-async function exportRawJson() {
-  const items = await getStoredItems();
-  const payload = JSON.stringify(buildRawPostTree(items), null, 2);
-  await downloadJson(payload, `dao-edu-facebook-scan-raw-${Date.now()}.json`);
+  window.location.reload();
 }
 
 async function syncToBackend() {
@@ -337,14 +254,11 @@ async function syncToBackend() {
     await saveSyncSettings();
     const data = await chrome.storage.local.get([
       META_KEY,
-      LEAD_ANALYSIS_KEY,
       API_BASE_URL_KEY,
       SCANNER_TOKEN_KEY,
       SYNC_STATE_KEY,
     ]);
     const meta = data[META_KEY] || {};
-    const localAnalysis =
-      data[LEAD_ANALYSIS_KEY] || window.DaoEduLeadFilter.analyze(items);
     const postUrl =
       meta.postUrl ||
       meta.pageUrl ||
@@ -387,7 +301,6 @@ async function syncToBackend() {
           ...meta,
           extensionVersion: chrome.runtime.getManifest().version,
         },
-        localAnalysis,
         items,
       }),
     });
@@ -403,7 +316,6 @@ async function syncToBackend() {
     await chrome.storage.local.remove([
       STORAGE_KEY,
       META_KEY,
-      LEAD_ANALYSIS_KEY,
     ]);
     const syncedState = {
       status: "SYNCED",
