@@ -39,6 +39,7 @@ export const useStore = create((set, get) => ({
   busy: false,
   logs: [],
   scannedPostUrls: [],
+  initialScannedUrls: [],
   batchAttemptedPostUrls: [],
 
   setStatus: (msg, isError = false) => set({ statusMsg: msg, statusError: isError }),
@@ -83,6 +84,7 @@ export const useStore = create((set, get) => ({
       apiBaseUrl: data[API_URL_KEY] || DEFAULT_API_URL,
       token: data[TOKEN_KEY] || '',
       scannedPostUrls: Array.isArray(data[SCANNED_URLS_KEY]) ? data[SCANNED_URLS_KEY] : [],
+      initialScannedUrls: Array.isArray(data[SCANNED_URLS_KEY]) ? data[SCANNED_URLS_KEY] : [],
       batchAttemptedPostUrls: Array.isArray(data[BATCH_ATTEMPTED_URLS_KEY]) ? data[BATCH_ATTEMPTED_URLS_KEY] : [],
     });
     // load batch state from background
@@ -375,7 +377,14 @@ export const useStore = create((set, get) => ({
 
       if (res?.ok) {
         const msg = `Xóa cache và tải về ${res.count || 0} bài thành công!`;
-        set({ syncMessage: msg, syncError: false, syncState: 'Đã đồng bộ' });
+        const updatedData = await chrome.storage.local.get(SCANNED_URLS_KEY);
+        const updatedScanned = updatedData[SCANNED_URLS_KEY] || [];
+        set({
+          syncMessage: msg,
+          syncError: false,
+          syncState: 'Đã đồng bộ',
+          initialScannedUrls: Array.isArray(updatedScanned) ? updatedScanned : [],
+        });
         addLog(msg);
         get().loadBatchState();
       } else {

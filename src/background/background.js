@@ -164,7 +164,7 @@ async function scanPostInBackgroundTab(postUrl, jobId, windowId, config) {
   try {
     scanTab = await chrome.tabs.create({
       url: normalizePostUrl(postUrl),
-      active: true,
+      active: false,
       ...(Number.isInteger(windowId) ? { windowId } : {}),
     });
     registerActiveScanTab(jobId, scanTab.id);

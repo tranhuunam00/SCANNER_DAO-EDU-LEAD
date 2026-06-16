@@ -170,6 +170,7 @@ function ScanActions() {
   const batchAttemptedPostUrls = useStore(s => s.batchAttemptedPostUrls);
   const items = useStore(s => s.items);
   const rescanFailedPosts = useStore(s => s.rescanFailedPosts);
+  const initialScannedUrls = useStore(s => s.initialScannedUrls);
   const postUrlRef = React.useRef(null);
 
   const isRunning = batchState.status === 'RUNNING';
@@ -288,7 +289,22 @@ function ScanActions() {
                           const statusColor = batchConfig.ignoreScanned ? "#ef4444" : "#2563eb";
                           return (
                             <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }} title={url}>
-                              <td style={{ padding: '4px 2px', fontFamily: 'monospace', fontWeight: 'bold', color: '#1e293b' }}>{id}</td>
+                              <td style={{ padding: '4px 2px', fontFamily: 'monospace' }}>
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    color: '#2563eb',
+                                    textDecoration: 'none',
+                                    fontWeight: 'bold',
+                                  }}
+                                  onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
+                                  onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
+                                >
+                                  {id}
+                                </a>
+                              </td>
                               <td style={{ padding: '4px 2px', textAlign: 'center', fontWeight: 'bold', color: '#0f172a' }}>{commentCount}</td>
                               <td style={{ padding: '4px 2px', textAlign: 'right', color: statusColor, fontWeight: 'bold' }}>{statusText}</td>
                               <td style={{ padding: '4px 2px', textAlign: 'right' }}>
@@ -349,7 +365,8 @@ function ScanActions() {
                         <tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569', textAlign: 'left' }}>
                           <th style={{ padding: '4px 2px', fontWeight: 'bold' }}>ID Bài Viết</th>
                           <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '50px', textAlign: 'center' }}>Comments</th>
-                          <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '90px', textAlign: 'right' }}>Trạng Thái</th>
+                          <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '70px', textAlign: 'center' }}>Phân loại</th>
+                          <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>Trạng Thái</th>
                           <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '70px', textAlign: 'right' }}>Hành Động</th>
                         </tr>
                       </thead>
@@ -375,11 +392,31 @@ function ScanActions() {
                               }
                             }
                           }
+
+                          const isRescan = Array.isArray(initialScannedUrls) && initialScannedUrls.some(u => getPostId(u) === id);
+                          const typeText = isRescan ? "Quét lại" : "Bài mới";
+                          const typeColor = isRescan ? "#d97706" : "#2563eb";
                           
                           return (
                             <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }} title={url}>
-                              <td style={{ padding: '4px 2px', fontFamily: 'monospace', fontWeight: 'bold', color: '#1e293b' }}>{id}</td>
+                              <td style={{ padding: '4px 2px', fontFamily: 'monospace' }}>
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    color: '#2563eb',
+                                    textDecoration: 'none',
+                                    fontWeight: 'bold',
+                                  }}
+                                  onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
+                                  onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
+                                >
+                                  {id}
+                                </a>
+                              </td>
                               <td style={{ padding: '4px 2px', textAlign: 'center', fontWeight: 'bold', color: '#0f172a' }}>{commentCount}</td>
+                              <td style={{ padding: '4px 2px', textAlign: 'center', color: typeColor, fontWeight: 'bold' }}>{typeText}</td>
                               <td style={{ padding: '4px 2px', textAlign: 'right', color: statusColor, fontWeight: 'bold' }}>{statusText}</td>
                               <td style={{ padding: '4px 2px', textAlign: 'right' }}>
                                 <button
