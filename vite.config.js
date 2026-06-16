@@ -17,8 +17,15 @@ export default defineConfig({
         // Đặt tên cố định cho content scripts (không có hash)
         // để background.js có thể inject đúng đường dẫn
         entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'content' || chunkInfo.name === 'batch-queue' || chunkInfo.name === 'background') {
-            return 'assets/[name].js';
+          const name = chunkInfo.name.toLowerCase();
+          if (name.includes('content')) {
+            return 'assets/content.js';
+          }
+          if (name.includes('batch-queue')) {
+            return 'assets/batch-queue.js';
+          }
+          if (name.includes('background')) {
+            return 'assets/background.js';
           }
           return 'assets/[name]-[hash].js';
         },

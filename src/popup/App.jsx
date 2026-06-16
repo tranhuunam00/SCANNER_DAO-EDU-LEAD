@@ -278,6 +278,217 @@ function DebugLog() {
   );
 }
 
+function CacheModal({ onClose }) {
+  const [cacheData, setCacheData] = React.useState({});
+  const [loading, setLoading] = React.useState(true);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const data = await chrome.storage.local.get(null);
+      setCacheData(data || {});
+    } catch (e) {
+      console.error(e);
+    }
+    setLoading(false);
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, []);
+
+  const KEY_MEANINGS = {
+    daoEduLeadScannerItems: 'Danh sách các bài viết và bình luận đã quét thành công',
+    daoEduLeadScannerMeta: 'Siêu dữ liệu của lượt quét gần nhất (số lượng, thời gian)',
+    daoEduLeadScannerBatchState: 'Trạng thái hiện tại và lịch sử của tiến trình quét hàng loạt',
+    daoEduLeadScannerBatchConfig: 'Cấu hình giới hạn bài viết & thời gian quét hàng loạt',
+    daoEduLeadScannerApiBaseUrl: 'Địa chỉ URL cổng kết nối API Backend',
+    daoEduLeadScannerToken: 'Token xác thực quyền gửi dữ liệu lên Backend',
+    daoEduLeadScannerScannedPostUrls: 'Danh sách các URL bài viết đã quét (để loại trừ bài cũ)',
+    daoEduLeadScannerBatchAttemptedPostUrls: 'Danh sách các URL bài viết đã thử quét/lỗi (để loại trừ)',
+    daoEduLeadScannerLeadAnalysis: 'Kết quả phân tích lọc lead tuyển sinh (cục bộ)',
+  };
+
+  const getMeaning = (key) => KEY_MEANINGS[key] || 'Dữ liệu hệ thống / Khác';
+
+  const formatValue = (val) => {
+    if (val === undefined || val === null) return 'null';
+    if (Array.isArray(val)) {
+      return `Mảng [${val.length} phần tử]`;
+    }
+    if (typeof val === 'object') {
+      return `Đối tượng {${Object.keys(val).length} trường}`;
+    }
+    return String(val);
+  };
+
+  const allKeys = Object.keys(cacheData).sort();
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.45)',
+      backdropFilter: 'blur(4px)',
+      zIndex: 9999,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+    }}>
+      <div style={{
+        backgroundColor: '#ffffff',
+        borderRadius: '14px',
+        width: '100%',
+        maxWidth: '560px',
+        maxHeight: '90vh',
+        boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)',
+        display: 'flex',
+        flexDirection: 'column',
+        border: '1px solid #e2e8f0',
+        overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '12px 16px',
+          borderBottom: '1px solid #f1f5f9',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          backgroundColor: '#f8fafc',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '18px' }}>🗄️</span>
+            <strong style={{ fontSize: '14px', color: '#1e293b' }}>Chi tiết Cache (chrome.storage.local)</strong>
+          </div>
+          <button 
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              fontSize: '18px',
+              cursor: 'pointer',
+              color: '#94a3b8',
+              fontWeight: 'bold',
+              minHeight: 'auto',
+              padding: '4px 8px',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = '#475569'}
+            onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{
+          padding: '16px',
+          overflowY: 'auto',
+          flex: 1,
+        }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '32px', color: '#64748b' }}>Đang tải dữ liệu cache...</div>
+          ) : allKeys.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>Cache trống rỗng.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <table style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: '11px',
+                textAlign: 'left',
+              }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #cbd5e1', color: '#475569' }}>
+                    <th style={{ padding: '6px 4px', fontWeight: 'bold' }}>Tên Key</th>
+                    <th style={{ padding: '6px 4px', fontWeight: 'bold' }}>Ý nghĩa</th>
+                    <th style={{ padding: '6px 4px', fontWeight: 'bold' }}>Giá trị</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allKeys.map((key) => {
+                    const val = cacheData[key];
+                    return (
+                      <tr key={key} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ padding: '8px 4px', fontWeight: 'bold', color: '#0f172a', wordBreak: 'break-all', maxWidth: '120px' }}>{key}</td>
+                        <td style={{ padding: '8px 4px', color: '#64748b', maxWidth: '140px' }}>{getMeaning(key)}</td>
+                        <td style={{ padding: '8px 4px' }}>
+                          <details style={{ cursor: 'pointer' }}>
+                            <summary style={{ color: '#2563eb', fontWeight: '500', outline: 'none' }}>
+                              {formatValue(val)}
+                            </summary>
+                            <pre style={{
+                              marginTop: '6px',
+                              padding: '8px',
+                              background: '#f1f5f9',
+                              borderRadius: '6px',
+                              fontSize: '10px',
+                              overflowX: 'auto',
+                              maxHeight: '160px',
+                              color: '#334155',
+                              fontFamily: 'monospace',
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-all',
+                            }}>
+                              {JSON.stringify(val, null, 2)}
+                            </pre>
+                          </details>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: '12px 16px',
+          borderTop: '1px solid #f1f5f9',
+          display: 'flex',
+          justifyContent: 'end',
+          gap: '8px',
+          backgroundColor: '#f8fafc',
+        }}>
+          <button 
+            onClick={loadData}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              borderColor: '#cbd5e1',
+              color: '#475569',
+              minHeight: '32px',
+            }}
+          >
+            🔄 Tải lại
+          </button>
+          <button 
+            onClick={onClose}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              backgroundColor: '#475569',
+              color: '#ffffff',
+              border: 'none',
+              fontWeight: 'bold',
+              minHeight: '32px',
+            }}
+          >
+            Đóng
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const init = useStore(s => s.init);
   const statusMsg = useStore(s => s.statusMsg);
@@ -285,6 +496,7 @@ export default function App() {
   const forceStop = useStore(s => s.forceStop);
   const exportJson = useStore(s => s.exportJson);
   const loadBatchState = useStore(s => s.loadBatchState);
+  const [showCache, setShowCache] = React.useState(false);
 
   useEffect(() => {
     init();
@@ -295,12 +507,35 @@ export default function App() {
 
   return (
     <main>
-      <header>
-        <div className="logo">D</div>
-        <div>
-          <h1>DAO EDU Scanner</h1>
-          <p>Thử nghiệm quét Facebook</p>
+      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+          <div className="logo">D</div>
+          <div>
+            <h1>DAO EDU Scanner</h1>
+            <p>Thử nghiệm quét Facebook</p>
+          </div>
         </div>
+        <button 
+          title="Xem chi tiết Cache" 
+          onClick={() => setShowCache(true)}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: '#15803d',
+            cursor: 'pointer',
+            padding: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '50%',
+            transition: 'background 0.2s',
+            minHeight: 'auto',
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#ecfdf5'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5V19c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 5c0 1.7 4 3 9 3s9-1.3 9-3"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>
+        </button>
       </header>
 
       <section className="notice">
@@ -325,6 +560,7 @@ export default function App() {
       </footer>
 
       <DebugLog />
+      {showCache && <CacheModal onClose={() => setShowCache(false)} />}
     </main>
   );
 }

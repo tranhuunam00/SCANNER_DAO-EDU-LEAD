@@ -358,9 +358,9 @@ function sleep(milliseconds) {
 }
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'FETCH_SCANNED_POST_IDS') {
-    const groupUrl = message.groupUrl;
-    if (!groupUrl) {
-      sendResponse({ ok: false, error: 'groupUrl is required' });
+    const groupUrls = message.groupUrls || (message.groupUrl ? [message.groupUrl] : []);
+    if (!groupUrls.length) {
+      sendResponse({ ok: false, error: 'groupUrls is required' });
       return true;
     }
 
@@ -369,14 +369,43 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const token = data.daoEduLeadScannerToken || '';
       
       try {
-        const url = `${apiBaseUrl}/facebook-lead-scans/sync/scanned-posts?groupUrl=${encodeURIComponent(groupUrl)}`;
         const headers = { 'Content-Type': 'application/json' };
         if (token) headers['x-dao-edu-scanner-token'] = token;
 
-        const res = await fetch(url, { headers });
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        const result = await res.json();
-        sendResponse({ ok: true, postIds: result.postIds || [], recentScans: result.recentScans || [] });
+        // Query cho tất cả các đại diện groupUrl song song
+        const promises = groupUrls.map(async (gUrl) => {
+          const url = `${apiBaseUrl}/facebook-lead-scans/sync/scanned-posts?groupUrl=${encodeURIComponent(gUrl)}`;
+          const res = await fetch(url, { headers });
+          if (!res.ok) return { postIds: [], recentScans: [] };
+          return await res.json().catch(() => ({ postIds: [], recentScans: [] }));
+        });
+
+        const results = await Promise.all(promises);
+        
+        // Gộp kết quả của tất cả các groupUrl
+        const mergedPostIds = new Set();
+        const mergedRecentScans = [];
+        const seenScanUrls = new Set();
+
+        for (const result of results) {
+          if (Array.isArray(result.postIds)) {
+            result.postIds.forEach(id => mergedPostIds.add(id));
+          }
+          if (Array.isArray(result.recentScans)) {
+            result.recentScans.forEach(scan => {
+              if (scan.postUrl && !seenScanUrls.has(scan.postUrl)) {
+                seenScanUrls.add(scan.postUrl);
+                mergedRecentScans.push(scan);
+              }
+            });
+          }
+        }
+
+        sendResponse({
+          ok: true,
+          postIds: [...mergedPostIds],
+          recentScans: mergedRecentScans
+        });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
       }

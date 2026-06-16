@@ -265,7 +265,7 @@ export const useStore = create((set, get) => ({
         META_KEY,
         BATCH_STATE_KEY,
         'daoEduLeadScannerScannedPostUrls',
-        'daoEduLeadScannerAttemptedPostUrls',
+        'daoEduLeadScannerBatchAttemptedPostUrls',
         'daoEduLeadScannerLeadAnalysis',
       ]);
 

@@ -1063,8 +1063,9 @@ function getFeedPostArticles() {
         )
         .join(' ');
       const hasPostControls =
-        /\b(binh luan|comment)\b/.test(controls) &&
-        /\b(chia se|share|thich|like)\b/.test(controls);
+        /\b(binh luan|comment)\b/.test(controls) ||
+        /\b(thich|like)\b/.test(controls) ||
+        /\b(chia se|share)\b/.test(controls);
       return hasContent && hasPostControls;
     })
     .sort(
@@ -1098,10 +1099,9 @@ function isUrlFromCurrentGroup(value) {
     if (!currentGroup || !targetGroup) return true;
     if (currentGroup === targetGroup) return true;
 
-    // Facebook can expose the same group as a slug in the address bar and a
-    // numeric ID in post permalinks. Keep numeric targets because shared-post
-    // links are uncommon and missing the real feed is worse than one extra URL.
-    return /^\d+$/.test(targetGroup);
+    // Facebook có thể sử dụng xen kẽ giữa ID dạng số (numeric) và tên định danh (slug) của cùng một nhóm.
+    // Nếu một trong hai bên là dạng số, chúng ta cho phép khớp để tránh bỏ sót bài viết.
+    return /^\d+$/.test(currentGroup) || /^\d+$/.test(targetGroup);
   } catch {
     return false;
   }
@@ -2205,9 +2205,18 @@ function isUsefulContent(text) {
 }
 
 function isInterfaceText(text) {
-  return /^(thích|phản hồi|trả lời|chia sẻ|bình luận|xem thêm|theo dõi|like|reply|share|comment|follow)(\s|$)/i.test(
-    text,
-  );
+  const cleaned = text.trim();
+  // Khớp chính xác các nút chức năng giao diện
+  if (/^(thích|phản hồi|trả lời|chia sẻ|bình luận|xem thêm|theo dõi|like|reply|share|comment|follow)$/i.test(cleaned)) {
+    return true;
+  }
+  // Khớp hàng nút chức năng chứa dấu phân cách như '·' hoặc '•' (ví dụ: "Thích · Phản hồi · 2 giờ")
+  if (cleaned.includes('·') || cleaned.includes('•')) {
+    if (/\b(thích|phản hồi|trả lời|chia sẻ|bình luận|xem thêm|theo dõi|like|reply|share|comment|follow)\b/i.test(cleaned)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isMetadataText(text) {
@@ -2288,43 +2297,67 @@ let lastSyncedGroupUrl = '';
 
 async function syncBackendScannedPosts() {
   const isGroup = location.pathname.startsWith('/groups/');
-  let groupUrl = '';
+  const groupUrls = new Set();
+  
+  let mainGroupUrl = '';
   if (isGroup) {
-    groupUrl = location.origin + location.pathname.split('/').slice(0, 3).join('/') + '/';
+    mainGroupUrl = location.origin + location.pathname.split('/').slice(0, 3).join('/') + '/';
   } else {
     const path1 = location.pathname.split('/')[1];
-    groupUrl = path1 ? location.origin + '/' + path1 + '/' : location.href;
+    mainGroupUrl = path1 ? location.origin + '/' + path1 + '/' : location.href;
   }
+  groupUrls.add(normalizePostUrl(mainGroupUrl));
   
-  if (!groupUrl || groupUrl === lastSyncedGroupUrl) return { ok: false, error: 'Khong thay groupUrl hoac da sync roi' };
-  lastSyncedGroupUrl = groupUrl;
+  // Quét các link trên trang để tìm thêm đại diện dạng slug/ID khác của cùng nhóm
+  for (const link of document.querySelectorAll('a[href]')) {
+    const href = link.getAttribute('href');
+    if (!href) continue;
+    const match = href.match(/\/groups\/([^/?#]+)/);
+    if (match) {
+      const gId = match[1];
+      if (gId && !['feed', 'profile.php', 'discover', 'joins', 'search'].includes(gId)) {
+        groupUrls.add(normalizePostUrl(`https://www.facebook.com/groups/${gId}/`));
+      }
+    }
+  }
+
+  const groupUrlsArray = [...groupUrls];
+  if (!groupUrlsArray.length || groupUrlsArray[0] === lastSyncedGroupUrl) {
+    return { ok: false, error: 'Khong thay groupUrl hoac da sync roi' };
+  }
+  lastSyncedGroupUrl = groupUrlsArray[0];
 
   try {
     const res = await chrome.runtime.sendMessage({
       type: 'FETCH_SCANNED_POST_IDS',
-      groupUrl,
+      groupUrls: groupUrlsArray,
     });
-      if (res?.ok) {
-        const scanned = await getScannedUrlSet();
-        if (Array.isArray(res.postIds)) {
-          res.postIds.forEach(id => {
-            if (id) scanned.add(normalizePostUrl(`${groupUrl}posts/${id}/`));
-          });
-          await chrome.storage.local.set({ 'daoEduLeadScannerScannedPostUrls': [...scanned] });
-          applyScannedMarkers(scanned);
-        }
-        if (Array.isArray(res.recentScans)) {
-          const state = await getContentBatchState();
-          if (state.status !== "RUNNING" && state.status !== "AWAITING_CONTINUE") {
-            state.history = res.recentScans;
-            await chrome.storage.local.set({ [BATCH_STATE_KEY]: state });
+    if (res?.ok) {
+      const scanned = await getScannedUrlSet();
+      if (Array.isArray(res.postIds)) {
+        res.postIds.forEach(id => {
+          if (id) {
+            // Lưu bài viết đã quét dưới mọi định dạng groupUrl để loại trừ chính xác
+            groupUrlsArray.forEach(gUrl => {
+              scanned.add(normalizePostUrl(`${gUrl}posts/${id}/`));
+            });
           }
-        }
-        return { ok: true, count: Array.isArray(res.recentScans) ? res.recentScans.length : 0 };
-      } else {
-        lastSyncedGroupUrl = ''; // allow retry
-        return { ok: false, error: res?.error || 'API trả về lỗi hoặc trống' };
+        });
+        await chrome.storage.local.set({ 'daoEduLeadScannerScannedPostUrls': [...scanned] });
+        applyScannedMarkers(scanned);
       }
+      if (Array.isArray(res.recentScans)) {
+        const state = await getContentBatchState();
+        if (state.status !== "RUNNING" && state.status !== "AWAITING_CONTINUE") {
+          state.history = res.recentScans;
+          await chrome.storage.local.set({ [BATCH_STATE_KEY]: state });
+        }
+      }
+      return { ok: true, count: Array.isArray(res.recentScans) ? res.recentScans.length : 0 };
+    } else {
+      lastSyncedGroupUrl = ''; // allow retry
+      return { ok: false, error: res?.error || 'API trả về lỗi hoặc trống' };
+    }
   } catch (e) {
     lastSyncedGroupUrl = ''; // allow retry
     return { ok: false, error: e.message };
