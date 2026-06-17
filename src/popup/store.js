@@ -379,14 +379,24 @@ export const useStore = create((set, get) => ({
         const msg = `Xóa cache và tải về ${res.count || 0} bài thành công!`;
         const updatedData = await chrome.storage.local.get(SCANNED_URLS_KEY);
         const updatedScanned = updatedData[SCANNED_URLS_KEY] || [];
+        // KHÔNG gọi loadBatchState() ở đây vì background vẫn giữ history cũ trong memory
+        // và sẽ override lại batchState.history đã được xóa sạch ở trên.
+        // State đã được reset hoàn toàn ở bước 1 (useStore.setState) rồi.
         set({
           syncMessage: msg,
           syncError: false,
           syncState: 'Đã đồng bộ',
+          scannedPostUrls: Array.isArray(updatedScanned) ? updatedScanned : [],
           initialScannedUrls: Array.isArray(updatedScanned) ? updatedScanned : [],
+          batchAttemptedPostUrls: [],
+          batchState: {
+            status: 'IDLE', current: 0, batchTotal: 0,
+            processedTotal: 0, history: [], message: '', activePostUrl: null,
+          },
         });
         addLog(msg);
-        get().loadBatchState();
+        // Reset luôn state trong background để đồng bộ
+        chrome.runtime.sendMessage({ type: 'STOP_BATCH_SCAN' }).catch(() => {});
       } else {
         throw new Error(res?.error || 'Không tải được tem từ BE.');
       }
