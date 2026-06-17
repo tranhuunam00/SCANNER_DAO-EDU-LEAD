@@ -1,5 +1,6 @@
 import {
   STORAGE_KEY,
+  RAW_STORAGE_KEY,
   META_KEY,
   SCANNED_URLS_KEY,
   BATCH_ATTEMPTED_URLS_KEY,
@@ -644,6 +645,12 @@ async function saveScanResultLocally(result) {
       clickedExpanders: result.summary.clickedExpanders,
     },
   });
+
+  if (result.rawItems) {
+    await chrome.storage.local.set({
+      [RAW_STORAGE_KEY]: result.rawItems,
+    });
+  }
 }
 
 async function markPostScannedLocally(postUrl) {
@@ -758,6 +765,8 @@ async function deepScanCurrentPost(maxTimeMs, maxClicksPerRound) {
   collectScanSnapshot();
 
   const collectedItems = [...collected.values()];
+  const rawItems = collectedItems.map(item => ({ ...item }));
+
   const post = collectedItems.find((item) => item.kind === 'POST') || null;
   const comments = resolveCommentRelationships(
     refineFlattenedThreadParents(
@@ -772,6 +781,7 @@ async function deepScanCurrentPost(maxTimeMs, maxClicksPerRound) {
   return {
     ok: true,
     items,
+    rawItems,
     summary: {
       ...latestSummary,
       posts,
@@ -788,14 +798,16 @@ async function deepScanCurrentPost(maxTimeMs, maxClicksPerRound) {
       return false;
     }
     latestSummary = scan.summary;
-    for (const item of scan.items) {
+    for (const item of scan.rawItems || scan.items) {
       const existing = collected.get(item.fingerprint);
       const shouldReplace =
         !existing ||
         (item.kind === 'POST' && !existing.text && item.text) ||
         (item.kind === 'COMMENT' &&
           Number(item.depth || 0) > Number(existing.depth || 0));
-      if (shouldReplace) collected.set(item.fingerprint, item);
+      if (shouldReplace) {
+        collected.set(item.fingerprint, { ...item });
+      }
     }
     return true;
   }
@@ -934,6 +946,7 @@ function scanCurrentPost(postUrlOverride = '') {
     comments = comments.filter(
       (comment) => comment.postId === expectedPostId,
     );
+    const rawItems = uniqueByFingerprint([post, ...comments].filter(Boolean)).map(item => ({ ...item }));
     comments = resolveCommentRelationships(
       refineFlattenedThreadParents(comments),
       post,
@@ -943,6 +956,7 @@ function scanCurrentPost(postUrlOverride = '') {
     return {
       ok: true,
       items,
+      rawItems,
       summary: {
         posts: post ? 1 : 0,
         comments: comments.length,
@@ -1609,7 +1623,14 @@ function refineFlattenedThreadParents(comments) {
   for (const comment of comments) {
     const relation = extractCommentRelation(comment.sourceUrl);
     const threadRootId = relation.parentCommentId;
-    if (!threadRootId) continue;
+    if (!threadRootId) {
+      if (comment.commentId) {
+        const preceding = precedingByThread.get(comment.commentId) || [];
+        preceding.push(comment);
+        precedingByThread.set(comment.commentId, preceding);
+      }
+      continue;
+    }
 
     const preceding = precedingByThread.get(threadRootId) || [];
     const normalizedText = normalizeUiText(comment.text);
@@ -1910,16 +1931,58 @@ function createLocalCommentId(postId, author, text) {
 }
 
 function extractCommentText(scope, authorName) {
-  const preferred = [
-    ...scope.querySelectorAll('[dir="auto"]'),
-  ]
-    .filter((node) => !node.closest('a, button, [role="button"]'))
-    .map((node) => cleanText(node.innerText))
-    .filter((text) => isUsefulContent(text))
-    .filter((text) => text !== authorName)
-    .filter((text) => !isMetadataText(text));
+  const textElements = [...scope.querySelectorAll('[dir="auto"]')].filter(
+    (node) => !node.closest('a, button, [role="button"]')
+  );
 
-  return preferred.sort((a, b) => b.length - a.length)[0] || '';
+  let extractedText = '';
+  if (textElements.length > 0) {
+    const sorted = textElements
+      .map((node) => {
+        const clone = node.cloneNode(true);
+        for (const img of clone.querySelectorAll('img')) {
+          const alt = img.getAttribute('alt') || '';
+          if (alt) {
+            img.replaceWith(document.createTextNode(alt));
+          } else {
+            img.remove();
+          }
+        }
+        return cleanText(clone.textContent || clone.innerText || '');
+      })
+      .filter((text) => text !== authorName && !isMetadataText(text) && isUsefulContent(text))
+      .sort((a, b) => b.length - a.length);
+
+    if (sorted.length > 0) {
+      extractedText = sorted[0];
+    }
+  }
+
+  if (!extractedText || extractedText.trim() === '') {
+    const images = [...scope.querySelectorAll('img')].filter((img) => {
+      if (img.closest('a, [role="link"]')) return false;
+      const alt = img.getAttribute('alt') || '';
+      // Bỏ qua emoji (alt chứa tối đa 2 ký tự và có tính chất emoji)
+      if (alt && [...alt].length <= 2 && /\p{Emoji}/u.test(alt)) return false;
+      return true;
+    });
+
+    if (images.length > 0) {
+      const altText = images[0].getAttribute('alt');
+      if (altText && altText.length > 2) {
+        extractedText = `[${altText}]`;
+      } else {
+        const src = images[0].getAttribute('src') || '';
+        if (src.includes('/stickers/') || src.includes('sticker')) {
+          extractedText = '[Nhãn dán]';
+        } else {
+          extractedText = '[Ảnh]';
+        }
+      }
+    }
+  }
+
+  return extractedText;
 }
 
 function findAuthor(container, options = {}) {
@@ -2233,7 +2296,7 @@ function isProfileUrl(href) {
 
 function isUsefulContent(text) {
   return (
-    text.length >= 2 &&
+    text.length >= 1 &&
     text.length <= 10000 &&
     !isInterfaceText(text) &&
     !isMetadataText(text)

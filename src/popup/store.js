@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   STORAGE_KEY,
+  RAW_STORAGE_KEY,
   META_KEY,
   BATCH_STATE_KEY,
   BATCH_CONFIG_KEY,
@@ -26,6 +27,7 @@ const DEFAULT_BATCH_STATE = {
 
 export const useStore = create((set, get) => ({
   items: [],
+  rawItems: [],
   meta: null,
   batchState: { ...DEFAULT_BATCH_STATE },
   batchConfig: { limit: 10, postTimeoutSec: DEFAULT_POST_TIMEOUT_SEC, totalTimeoutMin: DEFAULT_TOTAL_TIMEOUT_MIN, ignoreScanned: true },
@@ -47,11 +49,12 @@ export const useStore = create((set, get) => ({
   setBusy: (busy) => set({ busy }),
 
   exportJson: async () => {
-    const { items, batchState, meta } = get();
+    const { items, rawItems, batchState, meta } = get();
     const payload = {
       exportedAt: new Date().toISOString(),
       meta,
       items,
+      rawItems,
       batchHistory: Array.isArray(batchState.history) ? batchState.history : [],
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -63,13 +66,15 @@ export const useStore = create((set, get) => ({
 
   init: async () => {
     const data = await chrome.storage.local.get([
-      STORAGE_KEY, META_KEY, BATCH_STATE_KEY, BATCH_CONFIG_KEY, API_URL_KEY, TOKEN_KEY,
+      STORAGE_KEY, RAW_STORAGE_KEY, META_KEY, BATCH_STATE_KEY, BATCH_CONFIG_KEY, API_URL_KEY, TOKEN_KEY,
       SCANNED_URLS_KEY, BATCH_ATTEMPTED_URLS_KEY
     ]);
     const storedItems = data[STORAGE_KEY];
+    const storedRawItems = data[RAW_STORAGE_KEY];
     const storedBatch = data[BATCH_STATE_KEY];
     set({
       items: Array.isArray(storedItems) ? storedItems : [],
+      rawItems: Array.isArray(storedRawItems) ? storedRawItems : [],
       meta: data[META_KEY] || null,
       batchState: storedBatch && typeof storedBatch === 'object'
         ? { ...DEFAULT_BATCH_STATE, ...storedBatch, history: Array.isArray(storedBatch.history) ? storedBatch.history : [] }
@@ -148,9 +153,10 @@ export const useStore = create((set, get) => ({
   forceStop: async () => {
     try {
       await chrome.runtime.sendMessage({ type: 'STOP_BATCH_SCAN' });
-      await chrome.storage.local.remove([STORAGE_KEY, META_KEY, BATCH_STATE_KEY]);
+      await chrome.storage.local.remove([STORAGE_KEY, RAW_STORAGE_KEY, META_KEY, BATCH_STATE_KEY]);
       set({
         items: [],
+        rawItems: [],
         meta: null,
         batchState: { ...DEFAULT_BATCH_STATE },
         statusMsg: 'Đã dừng và xóa toàn bộ.',
@@ -230,6 +236,10 @@ export const useStore = create((set, get) => ({
       };
 
       await chrome.storage.local.set({ [STORAGE_KEY]: merged, [META_KEY]: meta });
+
+      if (result.rawItems) {
+        await chrome.storage.local.set({ [RAW_STORAGE_KEY]: result.rawItems });
+      }
 
       // Cập nhật danh sách bài đã quét để tránh quét trùng lặp khi chạy hàng loạt (ignoreScanned)
       if (result.summary.postUrl) {
@@ -458,6 +468,10 @@ chrome.storage.onChanged.addListener((changes, ns) => {
   if (changes[STORAGE_KEY]) {
     const val = changes[STORAGE_KEY].newValue;
     updates.items = Array.isArray(val) ? val : [];
+  }
+  if (changes[RAW_STORAGE_KEY]) {
+    const val = changes[RAW_STORAGE_KEY].newValue;
+    updates.rawItems = Array.isArray(val) ? val : [];
   }
   if (changes[META_KEY]) updates.meta = changes[META_KEY].newValue || null;
   if (changes[BATCH_STATE_KEY]) {

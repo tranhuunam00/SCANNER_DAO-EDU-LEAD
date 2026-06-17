@@ -144,11 +144,11 @@ async function stopBatch() {
         type: 'CANCEL_GROUP_BATCH',
         jobId,
       })
-      .catch(() => {});
+      .catch(() => { });
   }
 
   await Promise.all(
-    [...tabIds].map((tabId) => chrome.tabs.remove(tabId).catch(() => {})),
+    [...tabIds].map((tabId) => chrome.tabs.remove(tabId).catch(() => { })),
   );
   activeScanTabsByJob.delete(jobId);
   return { ok: true };
@@ -164,7 +164,7 @@ async function scanPostInBackgroundTab(postUrl, jobId, windowId, config) {
   try {
     scanTab = await chrome.tabs.create({
       url: normalizePostUrl(postUrl),
-      active: false,
+      active: true,
       ...(Number.isInteger(windowId) ? { windowId } : {}),
     });
     registerActiveScanTab(jobId, scanTab.id);
@@ -188,7 +188,7 @@ async function scanPostInBackgroundTab(postUrl, jobId, windowId, config) {
     return { ok: true, summary: result.summary };
   } finally {
     if (scanTab?.id) {
-      await chrome.tabs.remove(scanTab.id).catch(() => {});
+      await chrome.tabs.remove(scanTab.id).catch(() => { });
       unregisterActiveScanTab(jobId, scanTab.id);
       const state = await getBatchState();
       if (state.jobId === jobId && state.activeScanTabId === scanTab.id) {
@@ -375,7 +375,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chrome.storage.local.get([API_URL_KEY, TOKEN_KEY]).then(async (data) => {
       const apiBaseUrl = (data[API_URL_KEY] || 'http://localhost:5000/api').replace(/\/+$/, '');
       const token = data[TOKEN_KEY] || '';
-      
+
       try {
         const headers = { 'Content-Type': 'application/json' };
         if (token) headers['x-dao-edu-scanner-token'] = token;
@@ -389,7 +389,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         });
 
         const results = await Promise.all(promises);
-        
+
         // Gộp kết quả của tất cả các groupUrl
         const mergedPostIds = new Set();
         const mergedRecentScans = [];

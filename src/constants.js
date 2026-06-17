@@ -1,4 +1,5 @@
 export const STORAGE_KEY = 'daoEduLeadScannerItems';
+export const RAW_STORAGE_KEY = 'daoEduLeadScannerRawItems';
 export const META_KEY = 'daoEduLeadScannerMeta';
 export const BATCH_STATE_KEY = 'daoEduLeadScannerBatchState';
 export const BATCH_CONFIG_KEY = 'daoEduLeadScannerBatchConfig';
