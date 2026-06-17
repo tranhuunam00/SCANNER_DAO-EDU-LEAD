@@ -9,6 +9,6 @@ export const BATCH_ATTEMPTED_URLS_KEY = 'daoEduLeadScannerBatchAttemptedPostUrls
 export const LEAD_ANALYSIS_KEY = 'daoEduLeadScannerLeadAnalysis';
 
 export const BATCH_SIZE = 10;
-export const DEFAULT_API_URL = 'http://localhost:5000/api';
+export const DEFAULT_API_URL = import.meta.env.VITE_DAO_EDU_SCANNER_API_BASE_URL || 'http://localhost:5000/api';
 export const DEFAULT_POST_TIMEOUT_SEC = 120;
 export const DEFAULT_TOTAL_TIMEOUT_MIN = 30;
