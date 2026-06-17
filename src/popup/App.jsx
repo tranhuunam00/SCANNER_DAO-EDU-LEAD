@@ -496,33 +496,71 @@ function SyncPanel() {
 
   return (
     <section className="sync-panel">
-      <div className="section-title">
-        <h2>Đồng bộ BE</h2>
-        <span id="syncState">{syncState}</span>
+      {/* Header */}
+      <div className="sync-panel-header">
+        <div className="sync-panel-title">
+          <span className="sync-panel-icon">🔗</span>
+          <h2>Đồng bộ Backend</h2>
+        </div>
+        <span className={`sync-state-badge ${syncError ? 'sync-state-error' : syncState && syncState !== 'Chưa đồng bộ' ? 'sync-state-ok' : ''}`}>
+          {syncState || 'Chưa đồng bộ'}
+        </span>
       </div>
-      <div className="sync-fields" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <input id="apiBaseUrl" type="url" placeholder="http://localhost:5000/api"
-          value={apiBaseUrl}
-          onChange={e => saveApiUrl(e.target.value)}
-          autoComplete="off" />
-        
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#e5e7eb', cursor: 'pointer', userSelect: 'none', padding: '2px 0' }}>
-          <input type="checkbox" checked={autoSync} onChange={e => saveAutoSync(e.target.checked)} style={{ cursor: 'pointer' }} />
-          Tự động đồng bộ lên BE sau khi quét xong bài viết
-        </label>
+
+      {/* API URL Field */}
+      <div className="sync-url-field">
+        <label className="sync-field-label">Địa chỉ API</label>
+        <div className="sync-input-wrapper">
+          <span className="sync-input-icon">🌐</span>
+          <input
+            id="apiBaseUrl"
+            type="url"
+            placeholder="http://localhost:5000/api"
+            value={apiBaseUrl}
+            onChange={e => saveApiUrl(e.target.value)}
+            autoComplete="off"
+            className="sync-url-input"
+          />
+        </div>
       </div>
-      <button id="syncBackend" className="sync-button" onClick={syncToBackend}>
-        Đồng bộ Data lên BE &amp; Xóa local
-      </button>
-      <button id="forceSyncTem" className="sync-button"
-        style={{ marginTop: '8px', backgroundColor: '#2563eb', color: '#ffffff', border: 'none', fontWeight: 'bold' }}
-        onClick={pullTemFromBackend}>
-        🗑️ Xóa cache &amp; Kéo lại từ BE
-      </button>
-      <p id="syncMessage" className={`sync-message${syncError ? ' error' : ''}`}>{syncMessage}</p>
+
+      {/* Auto-sync Toggle */}
+      <label className="auto-sync-toggle">
+        <div className="toggle-left">
+          <span className="toggle-icon">⚡</span>
+          <div className="toggle-text">
+            <span className="toggle-title">Tự động đồng bộ</span>
+            <span className="toggle-desc">Đẩy lên BE sau khi quét xong mỗi bài</span>
+          </div>
+        </div>
+        <div className={`toggle-switch ${autoSync ? 'active' : ''}`} onClick={() => saveAutoSync(!autoSync)}>
+          <div className="toggle-thumb" />
+        </div>
+      </label>
+
+      {/* Action Buttons */}
+      <div className="sync-actions">
+        <button id="syncBackend" className="sync-btn sync-btn-primary" onClick={syncToBackend}>
+          <span>☁️</span>
+          <span>Đồng bộ lên BE & Xóa local</span>
+        </button>
+        <button id="forceSyncTem" className="sync-btn sync-btn-danger" onClick={pullTemFromBackend}>
+          <span>🗑️</span>
+          <span>Xóa cache & Kéo lại từ BE</span>
+        </button>
+      </div>
+
+      {/* Status Message */}
+      {syncMessage && (
+        <p id="syncMessage" className={`sync-message ${syncError ? 'error' : 'success'}`}>
+          <span>{syncError ? '❌' : '✅'}</span>
+          {syncMessage}
+        </p>
+      )}
     </section>
   );
 }
+
 
 function PreviewSection() {
   const rawItems = useStore(s => s.items);
