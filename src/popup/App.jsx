@@ -268,7 +268,7 @@ function ScanActions() {
                 
                 {/* SECTION 1: Đã quét thành công */}
                 <div style={{ marginBottom: '12px' }}>
-                  <strong style={{ color: '#1e293b', display: 'block', marginBottom: '4px' }}>1. Đã quét thành công ({uniqueScanned.length}):</strong>
+                  <strong style={{ color: '#1e293b', display: 'block', marginBottom: '4px' }}>1. Danh sách bài viết đã quét ({uniqueScanned.length}):</strong>
                   {uniqueScanned.length === 0 ? (
                     <div style={{ color: '#94a3b8', paddingLeft: '8px', marginTop: '2px' }}>Trống.</div>
                   ) : (
@@ -277,7 +277,8 @@ function ScanActions() {
                         <tr style={{ borderBottom: '1px solid #cbd5e1', color: '#475569', textAlign: 'left' }}>
                           <th style={{ padding: '4px 2px', fontWeight: 'bold' }}>ID Bài Viết</th>
                           <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '50px', textAlign: 'center' }}>Comments</th>
-                          <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '90px', textAlign: 'right' }}>Trạng Thái</th>
+                          <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '90px', textAlign: 'center' }}>Hệ thống</th>
+                          <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>Trạng Thái</th>
                           <th style={{ padding: '4px 2px', fontWeight: 'bold', width: '70px', textAlign: 'right' }}>Hành Động</th>
                         </tr>
                       </thead>
@@ -287,6 +288,24 @@ function ScanActions() {
                           const commentCount = getCommentCountForPost(url);
                           const statusText = batchConfig.ignoreScanned ? "Bỏ qua" : "Sẽ quét lại";
                           const statusColor = batchConfig.ignoreScanned ? "#ef4444" : "#2563eb";
+                          
+                          // Xác định trạng thái Hệ thống (Đồng bộ BE)
+                          const hasLocal = Array.isArray(items) && items.some(item => getPostId(item.pageUrl) === id);
+                          const wasOnSystem = Array.isArray(initialScannedUrls) && initialScannedUrls.some(u => getPostId(u) === id);
+                          
+                          let systemText = "Đã lên hệ thống";
+                          let systemColor = "#16a34a"; // Green
+                          
+                          if (hasLocal) {
+                            if (wasOnSystem) {
+                              systemText = "Có cập nhật mới";
+                              systemColor = "#2563eb"; // Blue
+                            } else {
+                              systemText = "Chưa lên hệ thống";
+                              systemColor = "#dc2626"; // Red/Orange
+                            }
+                          }
+
                           return (
                             <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }} title={url}>
                               <td style={{ padding: '4px 2px', fontFamily: 'monospace' }}>
@@ -306,6 +325,7 @@ function ScanActions() {
                                 </a>
                               </td>
                               <td style={{ padding: '4px 2px', textAlign: 'center', fontWeight: 'bold', color: '#0f172a' }}>{commentCount}</td>
+                              <td style={{ padding: '4px 2px', textAlign: 'center', color: systemColor, fontWeight: 'bold' }}>{systemText}</td>
                               <td style={{ padding: '4px 2px', textAlign: 'right', color: statusColor, fontWeight: 'bold' }}>{statusText}</td>
                               <td style={{ padding: '4px 2px', textAlign: 'right' }}>
                                 <button
