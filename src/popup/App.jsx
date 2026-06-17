@@ -491,6 +491,8 @@ function SyncPanel() {
   const syncMessage = useStore(s => s.syncMessage);
   const syncError = useStore(s => s.syncError);
   const syncState = useStore(s => s.syncState);
+  const autoSync = useStore(s => s.autoSync);
+  const saveAutoSync = useStore(s => s.saveAutoSync);
 
   return (
     <section className="sync-panel">
@@ -498,11 +500,16 @@ function SyncPanel() {
         <h2>Đồng bộ BE</h2>
         <span id="syncState">{syncState}</span>
       </div>
-      <div className="sync-fields">
+      <div className="sync-fields" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <input id="apiBaseUrl" type="url" placeholder="http://localhost:5000/api"
           value={apiBaseUrl}
           onChange={e => saveApiUrl(e.target.value)}
           autoComplete="off" />
+        
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#e5e7eb', cursor: 'pointer', userSelect: 'none', padding: '2px 0' }}>
+          <input type="checkbox" checked={autoSync} onChange={e => saveAutoSync(e.target.checked)} style={{ cursor: 'pointer' }} />
+          Tự động đồng bộ lên BE sau khi quét xong bài viết
+        </label>
       </div>
       <button id="syncBackend" className="sync-button" onClick={syncToBackend}>
         Đồng bộ Data lên BE &amp; Xóa local

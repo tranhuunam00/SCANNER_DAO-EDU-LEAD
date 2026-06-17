@@ -4,6 +4,8 @@ import {
   API_URL_KEY,
   TOKEN_KEY,
   BATCH_ATTEMPTED_URLS_KEY,
+  AUTO_SYNC_KEY,
+  STORAGE_KEY,
 } from '../constants';
 const activeScanTabsByJob = new Map();
 
@@ -185,6 +187,41 @@ async function scanPostInBackgroundTab(postUrl, jobId, windowId, config) {
       throw new Error(result?.error || 'Khong doc duoc bai viet.');
     }
     await assertBatchActive(jobId);
+
+    // Auto Sync logic
+    const storeData = await chrome.storage.local.get([AUTO_SYNC_KEY, API_URL_KEY, TOKEN_KEY]);
+    const isAutoSync = !!storeData[AUTO_SYNC_KEY];
+    
+    if (isAutoSync && result.items && result.items.length > 0) {
+      const apiBaseUrl = (storeData[API_URL_KEY] || 'http://localhost:5000/api').replace(/\/+$/, '');
+      const token = storeData[TOKEN_KEY] || '';
+      
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['x-dao-edu-scanner-token'] = token;
+        
+        const res = await fetch(`${apiBaseUrl}/facebook-lead-scans`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ items: result.items }),
+        });
+        
+        if (res.ok) {
+          // Success! Clear this post's items from local STORAGE_KEY
+          const currentPostId = result.summary.postId;
+          const localData = await chrome.storage.local.get(STORAGE_KEY);
+          const localItems = localData[STORAGE_KEY] || [];
+          // Filter out items of this post
+          const remainingItems = localItems.filter(item => item.postId !== currentPostId);
+          await chrome.storage.local.set({ [STORAGE_KEY]: remainingItems });
+        } else {
+          console.warn('Auto sync failed with status:', res.status);
+        }
+      } catch (e) {
+        console.error('Auto sync failed with error:', e);
+      }
+    }
+
     return { ok: true, summary: result.summary };
   } finally {
     if (scanTab?.id) {

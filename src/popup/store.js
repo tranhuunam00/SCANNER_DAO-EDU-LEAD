@@ -13,6 +13,7 @@ import {
   DEFAULT_API_URL,
   DEFAULT_POST_TIMEOUT_SEC,
   DEFAULT_TOTAL_TIMEOUT_MIN,
+  AUTO_SYNC_KEY,
 } from '../constants';
 
 const DEFAULT_BATCH_STATE = {
@@ -43,10 +44,15 @@ export const useStore = create((set, get) => ({
   scannedPostUrls: [],
   initialScannedUrls: [],
   batchAttemptedPostUrls: [],
+  autoSync: false,
 
   setStatus: (msg, isError = false) => set({ statusMsg: msg, statusError: isError }),
   setSyncMessage: (msg, isError = false) => set({ syncMessage: msg, syncError: isError }),
   setBusy: (busy) => set({ busy }),
+  saveAutoSync: (autoSync) => {
+    set({ autoSync });
+    chrome.storage.local.set({ [AUTO_SYNC_KEY]: autoSync });
+  },
 
   exportJson: async () => {
     const { items, rawItems, batchState, meta } = get();
@@ -67,7 +73,7 @@ export const useStore = create((set, get) => ({
   init: async () => {
     const data = await chrome.storage.local.get([
       STORAGE_KEY, RAW_STORAGE_KEY, META_KEY, BATCH_STATE_KEY, BATCH_CONFIG_KEY, API_URL_KEY, TOKEN_KEY,
-      SCANNED_URLS_KEY, BATCH_ATTEMPTED_URLS_KEY
+      SCANNED_URLS_KEY, BATCH_ATTEMPTED_URLS_KEY, AUTO_SYNC_KEY
     ]);
     const storedItems = data[STORAGE_KEY];
     const storedRawItems = data[RAW_STORAGE_KEY];
@@ -91,6 +97,7 @@ export const useStore = create((set, get) => ({
       scannedPostUrls: Array.isArray(data[SCANNED_URLS_KEY]) ? data[SCANNED_URLS_KEY] : [],
       initialScannedUrls: Array.isArray(data[SCANNED_URLS_KEY]) ? data[SCANNED_URLS_KEY] : [],
       batchAttemptedPostUrls: Array.isArray(data[BATCH_ATTEMPTED_URLS_KEY]) ? data[BATCH_ATTEMPTED_URLS_KEY] : [],
+      autoSync: !!data[AUTO_SYNC_KEY],
     });
     // load batch state from background
     get().loadBatchState();
@@ -273,6 +280,16 @@ export const useStore = create((set, get) => ({
       const msg = `Đã quét ${result.summary.posts} bài và ${result.summary.comments} bình luận.${note}`;
       set({ statusMsg: msg, statusError: false });
       addLog(msg);
+
+      // Reload states from storage
+      await get().init();
+
+      // Trigger auto sync if enabled
+      const { autoSync } = get();
+      if (autoSync) {
+        addLog('Tự động đồng bộ lên Backend đang bật...');
+        await get().syncToBackend();
+      }
     } catch (e) {
       addLog(`Lỗi: ${e.message}`);
       set({ statusMsg: e.message, statusError: true });
@@ -284,34 +301,72 @@ export const useStore = create((set, get) => ({
   syncToBackend: async () => {
     const { items, apiBaseUrl, token, addLog } = get();
     if (!items.length) return;
-    
+
     addLog('Bắt đầu đồng bộ dữ liệu lên Backend...');
-    set({ syncMessage: 'Đang đồng bộ...', syncError: false });
+    set({ syncMessage: 'Đang chuẩn bị đồng bộ...', syncError: false });
+
+    // Group items by postId
+    const itemsByPost = new Map();
+    for (const item of items) {
+      const pId = item.postId || 'unknown';
+      if (!itemsByPost.has(pId)) {
+        itemsByPost.set(pId, []);
+      }
+      itemsByPost.get(pId).push(item);
+    }
+
+    const postIds = Array.from(itemsByPost.keys());
+    addLog(`Tìm thấy ${postIds.length} bài viết cần đồng bộ.`);
+
+    const base = (apiBaseUrl || DEFAULT_API_URL).replace(/\/+$/, '');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['x-dao-edu-scanner-token'] = token;
+    }
+
+    let successCount = 0;
+    let totalSyncedItems = 0;
+    let remainingItems = [...items];
+
     try {
-      const base = (apiBaseUrl || DEFAULT_API_URL).replace(/\/+$/, '');
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) {
-        headers['x-dao-edu-scanner-token'] = token;
+      for (let i = 0; i < postIds.length; i++) {
+        const pId = postIds[i];
+        const postItems = itemsByPost.get(pId);
+
+        set({ 
+          syncMessage: `Đang đồng bộ bài viết ${i + 1}/${postIds.length} (Mã: ${pId}, gồm ${postItems.length} bình luận)...`,
+          syncError: false 
+        });
+
+        const res = await fetch(`${base}/facebook-lead-scans`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ items: postItems }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || `API lỗi ở bài ${pId}: ${res.status}`);
+        }
+
+        successCount++;
+        totalSyncedItems += postItems.length;
+
+        // Remove these synced items from the remaining list
+        remainingItems = remainingItems.filter(item => (item.postId || 'unknown') !== pId);
+        // Overwrite storage with remaining unsynced items
+        await chrome.storage.local.set({ [STORAGE_KEY]: remainingItems });
+        set({ items: remainingItems });
       }
-      
-      const res = await fetch(`${base}/facebook-lead-scans`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ items }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `API lỗi: ${res.status}`);
-      }
-      const data = await res.json();
-      await chrome.storage.local.set({ [STORAGE_KEY]: [] });
-      const successMsg = `Thành công! Đã đồng bộ ${data.data?.itemCount || 0} mục lên BE.`;
+
+      const successMsg = `Đồng bộ thành công ${successCount}/${postIds.length} bài viết (${totalSyncedItems} bình luận)!`;
       set({ items: [], meta: null, syncState: 'Đã đồng bộ', syncMessage: successMsg, syncError: false });
       addLog(successMsg);
       // pull scanned from BE (silent if not on a Facebook tab)
       get().pullTemFromBackend(true);
+
     } catch (e) {
-      const errMsg = `Đồng bộ thất bại: ${e.message}`;
+      const errMsg = `Đồng bộ thất bại (Đã đồng bộ được ${successCount}/${postIds.length} bài): ${e.message}`;
       set({ syncMessage: errMsg, syncError: true });
       addLog(errMsg);
     }
