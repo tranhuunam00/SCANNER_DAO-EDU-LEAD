@@ -1602,7 +1602,6 @@ function resolveCommentRelationships(comments, post) {
       comment.depth = 1;
       comment.treePath = comment.commentId;
       comment.contextTexts = [
-        ...(post?.text ? [post.text] : []),
         comment.text,
       ];
       comment.replyToAuthor = '';
@@ -1746,7 +1745,7 @@ function parseCommentArticle(
     ? `${directParentItem.treePath}|${commentId}`
     : commentId;
   const contextTexts = [
-    ...(directParentItem?.contextTexts || (postText ? [postText] : [])),
+    ...(directParentItem?.contextTexts || []),
     text,
   ];
 
